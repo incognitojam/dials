@@ -18,14 +18,6 @@ struct SettingsView: View {
             case .about: "info.circle"
             }
         }
-
-        var subtitle: String {
-            switch self {
-            case .routing: "Priority & exclusions"
-            case .activity: "Recent changes"
-            case .about: "This build"
-            }
-        }
     }
 
     var body: some View {
@@ -43,7 +35,7 @@ struct SettingsView: View {
                 Spacer(minLength: 0)
             }
             .padding(12)
-            .frame(width: 190)
+            .frame(width: 168)
             .frame(maxHeight: .infinity)
             .background(Color(nsColor: .windowBackgroundColor))
 
@@ -76,14 +68,8 @@ private struct SidebarButton: View {
                     .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
                     .frame(width: 20)
 
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(pane.rawValue)
-                        .font(.system(size: 13, weight: isSelected ? .semibold : .regular))
-                    Text(pane.subtitle)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
+                Text(pane.rawValue)
+                    .font(.system(size: 13, weight: isSelected ? .semibold : .regular))
 
                 Spacer(minLength: 0)
             }
@@ -96,7 +82,7 @@ private struct SidebarButton: View {
             )
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("\(pane.rawValue). \(pane.subtitle)")
+        .accessibilityLabel(pane.rawValue)
         .accessibilityValue(isSelected ? "Selected" : "")
     }
 }
@@ -111,22 +97,14 @@ private struct RoutingSettingsView: View {
             VStack(alignment: .leading, spacing: 20) {
                 PaneHeader(
                     title: "Routing",
-                    blurb: "neqMac walks each list from the top and stops at the first device that is connected and allowed. Pinning a device with Use now holds it until that device disconnects."
+                    blurb: "neqMac uses the first connected device not marked Never use; Use now temporarily overrides the order."
                 )
 
                 automationCard
 
-                DeviceRulesSection(
-                    title: "Output priority",
-                    subtitle: "Where sound goes. Put headphones and desk speakers above the built-in speakers.",
-                    direction: .output
-                )
+                DeviceRulesSection(direction: .output)
 
-                DeviceRulesSection(
-                    title: "Input priority",
-                    subtitle: "Where sound comes from. Exclude a headset microphone to stop macOS dropping the output to Bluetooth call quality.",
-                    direction: .input
-                )
+                DeviceRulesSection(direction: .input)
             }
             .padding(26)
             .frame(maxWidth: 760, alignment: .leading)
@@ -252,8 +230,6 @@ private struct SettingsToggleRow: View {
 
 private struct DeviceRulesSection: View {
     @EnvironmentObject private var model: AppModel
-    let title: String
-    let subtitle: String
     let direction: DeviceDirection
 
     private var rules: [DeviceRule] { model.rules(for: direction) }
@@ -274,23 +250,15 @@ private struct DeviceRulesSection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                DirectionTag(direction: direction)
-                Text(title)
-                    .font(.headline)
-                Spacer(minLength: 8)
-                Text("\(allowedConnectedCount) of \(rules.count) usable")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .help("Devices that are connected and not excluded.")
+            HStack(spacing: 7) {
+                Image(systemName: direction.systemImage)
+                    .foregroundStyle(tint)
+                    .accessibilityHidden(true)
+                Text(direction.title)
             }
+            .font(.headline)
             .accessibilityElement(children: .combine)
             .accessibilityAddTraits(.isHeader)
-
-            Text(subtitle)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
 
             VStack(spacing: 0) {
                 if rules.isEmpty {
@@ -463,8 +431,9 @@ private struct DeviceRuleRow: View {
             ))
             .toggleStyle(.checkbox)
             .fixedSize()
-            .help("Skip \(rule.name) entirely. It cannot be selected while this is on.")
+            .help(neverUseHelp)
             .accessibilityLabel("Never use \(rule.name)")
+            .accessibilityHint(neverUseHelp)
 
             Button("Use now") {
                 model.useNow(rule)
@@ -484,6 +453,13 @@ private struct DeviceRuleRow: View {
         if model.device(for: rule) == nil { return "\(rule.name) is not connected." }
         if state.isCurrent { return "\(rule.name) is already in use." }
         return "Switch to \(rule.name) now and pin it until it disconnects."
+    }
+
+    private var neverUseHelp: String {
+        if rule.direction == .input {
+            return "Prevent neqMac from selecting this microphone. Excluding a Bluetooth headset microphone can preserve high-quality headphone audio."
+        }
+        return "Prevent neqMac from selecting this output."
     }
 
     // MARK: The signal chain rail
