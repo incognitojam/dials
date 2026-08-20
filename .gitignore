@@ -6,3 +6,5 @@
 /*.xcodeproj/xcuserdata
 *.xcuserstate
 *.log
+
+/tools/tap-spike/build/
