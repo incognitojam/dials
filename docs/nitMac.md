@@ -42,7 +42,7 @@ The framework is resolved with `dlsym` at run time. A macOS release that withdra
 - Brightness up and down keys move every controllable display by one of sixteen evenly spread stops
 - Shift-option steps by a single percent, matching how macOS fine-tunes its own brightness
 - A key press that nitMac cannot act on is passed straight back to macOS, so the built-in display keeps working normally
-- Its own HUD replaces the system one, which is swallowed along with the key press, and follows Appearance › Liquid Glass between Regular and Clear
+- Its own HUD replaces the system one, which is swallowed along with the key press
 - A slider per display in the menu bar, usable without Accessibility access
 - Displays are rediscovered when the screen arrangement changes
 - A Start at login switch in the menu bar panel, registered through `SMAppService`

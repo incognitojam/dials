@@ -215,29 +215,13 @@ private struct BrightnessTrack: View {
 }
 
 
-/// Appearance › Liquid Glass offers Regular and Clear, and the system indicator
-/// follows it. `glassEffect` does not: `.regular` renders identically whichever
-/// is chosen, so the choice has to be made here.
-///
-/// The setting is written to `NSGlassDiffusionSetting` in the global domain, and
-/// is absent until it is changed from the default, so anything but a stored 0 is
-/// treated as Regular.
-enum GlassDiffusion {
-    static var prefersClear: Bool {
-        guard let setting = UserDefaults.standard.object(forKey: "NSGlassDiffusionSetting") as? Int else {
-            return false
-        }
-        return setting == 0
-    }
-}
-
 private extension View {
     /// Liquid Glass proper, with the pre-Tahoe material as the fallback.
     @ViewBuilder
     func hudGlass(cornerRadius: CGFloat) -> some View {
         let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
         if #available(macOS 26.0, *) {
-            glassEffect(GlassDiffusion.prefersClear ? .clear : .regular, in: shape)
+            glassEffect(.regular, in: shape)
         } else {
             background(shape.fill(.regularMaterial))
         }
