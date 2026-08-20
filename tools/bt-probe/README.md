@@ -52,3 +52,24 @@ The commands and framing come from
 [SonyHeadphonesClient](https://github.com/Plutoberth/SonyHeadphonesClient). Not every
 inquired type exists on every model: an unsupported one is acknowledged and then ignored,
 so silence after an ACK means the wrong command rather than a broken channel.
+
+## samsung.swift
+
+Opens the Samsung vendor channel on connected Galaxy Buds and decodes what they send. It
+**writes nothing at all**, because the earbuds volunteer their state unprompted, so it
+cannot change a setting even in principle.
+
+```sh
+swiftc -O -o build/samsung samsung.swift
+./build/samsung                       # defaults to a device named Galaxy Buds
+./build/samsung "Galaxy Buds Live" 90 # name to match, seconds to listen
+```
+
+It prints every frame with its message id and payload, verifies the CRC on each, and
+decodes battery, placement, equalizer preset and noise cancelling. Toggle noise cancelling
+on an earbud during the window to see the change pushed. The earbuds must be out of their
+case for touch-and-hold to register.
+
+Field offsets are the Buds Live layout and shift on every model after Buds+. The framing,
+message ids and offsets come from
+[GalaxyBudsClient](https://github.com/timschneeb/GalaxyBudsClient).
