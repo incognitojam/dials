@@ -21,3 +21,14 @@ Writes are not the obvious suspect: `DisplayServicesSetBrightness` measures 0.02
 ## Possibly drop the percentage
 
 The panel shows the display name, a percentage and a slider. The percentage may be redundant against the slider position. Undecided — the system's own panel does not show one.
+
+## The indicator will not match the system brightness panel
+
+The system panel is more vivid than the indicator, which reads slightly milky beside it. Measured against a flat backdrop of `(60, 120, 40)`, its interior comes out `(31, 118, 5)`: brightness held, red and blue crushed. That is a saturation boost, which is how the pre-Tahoe vibrancy materials behave and is not something Liquid Glass does. `NSVisualEffectView` with `.hudWindow` has the same character but arrives darker, at `(39, 94, 13)`.
+
+Neither glass variant reproduces it. `.regular` saturates but goes very dark, `(12, 59, 0)`; `.clear` barely alters the backdrop at all, `(58, 113, 39)`.
+
+Two things not to repeat here:
+
+- Appearance › Liquid Glass offers Clear and Tinted, where Clear is the standard material and Tinted is the more opaque one. That setting has nothing to do with `Glass.clear`, which is the variant for small controls over photos and maps and is meant to be paired with a dimming layer. Matching the two by name gives the milky panel.
+- The system panel is drawn by `OSDUIHelper`, a system process, so there is no public API for the material it uses. Parity is not reachable; deciding the indicator should simply look like itself is a reasonable answer.
