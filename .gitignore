@@ -8,3 +8,4 @@
 *.log
 
 /tools/tap-spike/build/
+/tools/bt-probe/build/
