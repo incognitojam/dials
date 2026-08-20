@@ -6,6 +6,8 @@ This proof of concept deliberately contains no equalizer yet. Its job is to vali
 
 How the equalizer will reach the signal path, and what a Core Audio process tap costs in latency and permissions, is measured in [System audio taps](audio-taps.md).
 
+Where the curves it applies come from, and the format they are stored in, is covered in [Equalizer profiles](eq-profiles.md).
+
 ## Requirements
 
 - macOS 14 or later

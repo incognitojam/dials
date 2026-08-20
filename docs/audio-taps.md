@@ -140,6 +140,12 @@ That processing matters beyond measurement. A vendor equaliser applies *after* n
 and published correction curves target the raw driver response, so a profile stacked on
 top of a headset's own tuning will correct twice. Profiles need to record what the
 headset was set to.
+[Equalizer profiles](eq-profiles.md) records how the upstream profile database handles
+this: the setting is part of the product identity rather than metadata on the curve.
+[Reading headset state](headset-control.md) then measures the headset reporting that setting
+over its vendor Bluetooth channel. It also notes that the tested headset had an adaptive
+upscaler enabled throughout, while its equalizer was verified off — which makes the upscaler
+the better suspect for the scatter above.
 
 Also untested: whether alert sounds and applications that open a device exclusively are
 caught by the tap, what happens to a running tap when its device disappears, and how to
