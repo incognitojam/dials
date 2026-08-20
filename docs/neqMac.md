@@ -4,6 +4,8 @@ neqMac is an early native macOS audio device guardian. It keeps the system on th
 
 This proof of concept deliberately contains no equalizer yet. Its job is to validate reliable device discovery and switching before an audio-processing pipeline is added.
 
+How the equalizer will reach the signal path, and what a Core Audio process tap costs in latency and permissions, is measured in [System audio taps](audio-taps.md).
+
 ## Requirements
 
 - macOS 14 or later
