@@ -1,58 +1,55 @@
-# neqMac
+# dials
 
-neqMac is an early native macOS audio device guardian. It keeps the system on the highest-priority connected input and output devices, and can reject devices that should never become a system default.
+A set of small native macOS utilities, each replacing one feature of a larger app and doing nothing else.
 
-This proof of concept deliberately contains no equalizer yet. Its job is to validate reliable device discovery and switching before an audio-processing pipeline is added.
+| App | What it does |
+| --- | --- |
+| [neqMac](docs/neqMac.md) | Keeps the system on the highest-priority connected audio input and output, and rejects devices that should never become a default |
+| [nitMac](docs/nitMac.md) | Puts the physical brightness keys onto an external monitor |
+
+They ship as separate apps rather than one, so each keeps its own bundle identifier, its own permissions and its own crash, while sharing a repository, a build script and a design vocabulary.
 
 ## Requirements
 
 - macOS 14 or later
 - Xcode 16 or later, including the macOS SDK and command-line tools
 
-Check the active toolchain with:
-
-```sh
-xcode-select -p
-xcodebuild -version
-swift --version
-```
-
 ## Build and run
 
-Run the tests:
+Run every test:
 
 ```sh
 swift test
 ```
 
-Build an ad-hoc signed menu-bar app:
+Build one app:
 
 ```sh
-./scripts/build-app.sh
-open build/neqMac.app
+./scripts/build-app.sh nitMac
+open build/nitMac.app
 ```
 
-neqMac appears in the menu bar rather than the Dock. Automatic routing starts off, so the first launch does not change any audio device.
+Both appear in the menu bar rather than the Dock.
 
-## First device test
+## Signing
 
-1. Open **Routing preferences…** from the neqMac menu-bar panel.
-2. Put the preferred fallback output above **Mac Speakers**.
-3. In **Input priority**, enable **Never use** for the Bluetooth headset microphone.
-4. Turn on **Automatic routing**.
-5. Connect and disconnect the headset, then sleep and wake the Mac.
-6. Check **Activity** to confirm why each change occurred.
+macOS ties permission grants to an app's signing identity, and an ad-hoc signature changes on every build, so a permission is dropped each time it is rebuilt. `build-app.sh` signs with a certificate named `<app> Local` when one exists and falls back to ad-hoc otherwise. To create one:
 
-The headset may remain an allowed output while its input is excluded. “Never use” prevents neqMac from accepting that device as the macOS system default; it cannot stop another application from explicitly opening the device itself.
+```sh
+openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
+  -subj "/CN=nitMac Local" \
+  -addext "extendedKeyUsage=critical,codeSigning" \
+  -keyout /tmp/local.key -out /tmp/local.crt
+openssl pkcs12 -export -legacy -macalg sha1 \
+  -certpbe PBE-SHA1-3DES -keypbe PBE-SHA1-3DES \
+  -inkey /tmp/local.key -in /tmp/local.crt \
+  -name "nitMac Local" -out /tmp/local.p12 -passout pass:local
+security import /tmp/local.p12 -k ~/Library/Keychains/login.keychain-db -P local -A
+security add-trusted-cert -r trustRoot -p codeSign \
+  -k ~/Library/Keychains/login.keychain-db /tmp/local.crt
+rm /tmp/local.key /tmp/local.p12 /tmp/local.crt
+```
 
-## Current behaviour
+The `-legacy` flags matter: OpenSSL 3 writes a PKCS12 that the macOS keychain refuses to read without them. Any other identity works via `SIGN_IDENTITY="..." ./scripts/build-app.sh <app>`.
 
-- Independent persisted priority lists for inputs and outputs
-- Persisted per-direction exclusions
-- Automatic fallback when devices appear or disappear
-- Manual overrides that end when the chosen device disconnects
-- Optional routing of system alert sounds with the main output
-- Debounced Core Audio listener handling to avoid switch loops
-- Local in-memory activity timeline
-
-Device rules use Core Audio UIDs rather than display names, so renaming a device does not create a second rule.
+Changing an app's identity changes its signature, so it has to be removed from the relevant Privacy list and re-added once after the switch.
