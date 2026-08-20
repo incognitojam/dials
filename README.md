@@ -38,6 +38,8 @@ macOS ties permission grants to an app's signing identity, and an ad-hoc signatu
 ```sh
 openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
   -subj "/CN=nitMac Local" \
+  -addext "basicConstraints=critical,CA:FALSE" \
+  -addext "keyUsage=critical,digitalSignature" \
   -addext "extendedKeyUsage=critical,codeSigning" \
   -keyout /tmp/local.key -out /tmp/local.crt
 openssl pkcs12 -export -legacy -macalg sha1 \
@@ -50,6 +52,6 @@ security add-trusted-cert -r trustRoot -p codeSign \
 rm /tmp/local.key /tmp/local.p12 /tmp/local.crt
 ```
 
-The `-legacy` flags matter: OpenSSL 3 writes a PKCS12 that the macOS keychain refuses to read without them. Any other identity works via `SIGN_IDENTITY="..." ./scripts/build-app.sh <app>`.
+The `-legacy` flags matter: OpenSSL 3 writes a PKCS12 that the macOS keychain refuses to read without them. The `basicConstraints` and `keyUsage` extensions matter too: without them `openssl req -x509` writes a `CA:TRUE` certificate with no key usage, which `security find-identity -p codesigning` rejects as `Invalid Key Usage for policy`. Any other identity works via `SIGN_IDENTITY="..." ./scripts/build-app.sh <app>`.
 
 Changing an app's identity changes its signature, so it has to be removed from the relevant Privacy list and re-added once after the switch.
