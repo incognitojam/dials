@@ -28,6 +28,7 @@ final class AppModel: ObservableObject {
     private var rediscoveryTask: Task<Void, Never>?
     private var permissionTimer: Timer?
     private var screenObserver: NSObjectProtocol?
+    private var isPanelOpen = false
 
     init() {
         tap.handler = { [weak self] direction, modifiers in
@@ -35,6 +36,7 @@ final class AppModel: ObservableObject {
         }
 
         discover()
+        hud.prepare()
         startTap()
         observeScreenChanges()
     }
@@ -63,11 +65,17 @@ final class AppModel: ObservableObject {
             displays[index].percent = next
         }
 
-        if let leading = displays.first {
+        // While the panel is open, its slider is already showing the change and the
+        // indicator would sit on top of it at screen-saver level.
+        if let leading = displays.first, !isPanelOpen {
             // The system indicator titles itself with the device it is acting on,
             // which only makes sense here while one display is being moved.
             let title = displays.count == 1 ? leading.name : "Brightness"
-            hud.show(fraction: leading.fraction, title: title, on: NSScreen.main)
+            // Handed to the next turn of the run loop so the event tap callback
+            // returns straight away and cannot be disabled for being slow.
+            Task { @MainActor in
+                self.hud.show(fraction: leading.fraction, title: title, on: NSScreen.main)
+            }
         }
         return true
     }
@@ -86,6 +94,16 @@ final class AppModel: ObservableObject {
         displays = found.map {
             DisplayState(id: $0.id, name: $0.name, percent: $0.percent() ?? 100)
         }
+    }
+
+    func panelDidAppear() {
+        isPanelOpen = true
+        hud.hide()
+        refresh()
+    }
+
+    func panelDidDisappear() {
+        isPanelOpen = false
     }
 
     /// Cheap enough to run whenever the panel is opened, which is the only time
@@ -123,7 +141,7 @@ final class AppModel: ObservableObject {
     func requestAccessibilityAccess() {
         let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true]
         _ = AXIsProcessTrustedWithOptions(options as CFDictionary)
-        pollForPermission()
+        startWatchdog()
     }
 
     func openAccessibilitySettings() {
@@ -137,25 +155,30 @@ final class AppModel: ObservableObject {
 
     private func startTap() {
         hasAccessibilityAccess = AXIsProcessTrusted()
-        if tap.start() {
-            permissionTimer?.invalidate()
-            permissionTimer = nil
-        } else {
-            pollForPermission()
-        }
+        _ = tap.start()
+        startWatchdog()
     }
 
-    /// Granting Accessibility does not notify the app, so the only way to pick the
-    /// permission up without a relaunch is to keep asking.
-    private func pollForPermission() {
+    /// Covers two things that cannot be observed any other way: granting
+    /// Accessibility does not notify the app, and a tap the system has disabled
+    /// does not announce itself either.
+    private func startWatchdog() {
         guard permissionTimer == nil else { return }
         permissionTimer = Timer.scheduledTimer(
             withTimeInterval: Self.permissionPollInterval,
             repeats: true
         ) { [weak self] _ in
             Task { @MainActor in
-                guard let self, !self.tap.isRunning else { return }
-                self.startTap()
+                guard let self else { return }
+                let trusted = AXIsProcessTrusted()
+                if self.hasAccessibilityAccess != trusted {
+                    self.hasAccessibilityAccess = trusted
+                }
+                if !self.tap.isRunning {
+                    _ = self.tap.start()
+                } else if !self.tap.isEnabled {
+                    self.tap.reenable()
+                }
             }
         }
     }

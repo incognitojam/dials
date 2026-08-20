@@ -31,7 +31,8 @@ struct MenuBarContentView: View {
         }
         .padding(16)
         .frame(width: 300)
-        .onAppear { model.refresh() }
+        .onAppear { model.panelDidAppear() }
+        .onDisappear { model.panelDidDisappear() }
     }
 
     private func displaySection(_ display: AppModel.DisplayState) -> some View {
@@ -47,9 +48,10 @@ struct MenuBarContentView: View {
                     .foregroundStyle(.secondary)
             }
 
+            // Same glyphs, size and ink as the indicator and as Control Center's
+            // Display card, so the two surfaces read as one app.
             HStack(spacing: 8) {
-                Image(systemName: "sun.min")
-                    .foregroundStyle(.secondary)
+                Image(systemName: "sun.min.fill")
                 Slider(
                     value: Binding(
                         get: { Double(display.percent) },
@@ -57,9 +59,9 @@ struct MenuBarContentView: View {
                     ),
                     in: 0...100
                 )
-                Image(systemName: "sun.max")
-                    .foregroundStyle(.secondary)
+                Image(systemName: "sun.max.fill")
             }
+            .font(.system(size: 15.5))
             .accessibilityLabel("\(display.name) brightness")
         }
     }

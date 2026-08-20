@@ -15,6 +15,19 @@ final class BrightnessKeyTap {
 
     var isRunning: Bool { tap != nil }
 
+    /// The system disables a tap whose callback was too slow to answer, and the
+    /// event that trips it is swallowed. Recovering only from the disable
+    /// callback means a tap can stay dead, so its state is also polled.
+    var isEnabled: Bool {
+        guard let tap else { return false }
+        return CGEvent.tapIsEnabled(tap: tap)
+    }
+
+    func reenable() {
+        guard let tap else { return }
+        CGEvent.tapEnable(tap: tap, enable: true)
+    }
+
     private static let systemDefinedType = CGEventType(rawValue: 14)!  // NX_SYSDEFINED
     private static let systemDefinedSubtype: Int16 = 8
     private static let brightnessUp = 2                                // NX_KEYTYPE_BRIGHTNESS_UP

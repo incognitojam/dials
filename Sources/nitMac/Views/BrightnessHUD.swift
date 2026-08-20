@@ -55,6 +55,21 @@ final class BrightnessHUD {
         }
     }
 
+    /// Used when the menu bar panel opens: its slider takes over as the feedback,
+    /// and the indicator would otherwise sit on top of it at screen-saver level.
+    /// Builds the panel ahead of the first key press. Creating a hosting view and
+    /// its glass costs enough that doing it inside the event tap callback risks
+    /// tripping the tap's timeout.
+    func prepare() {
+        if panel == nil { panel = makePanel() }
+    }
+
+    func hide() {
+        dismissTask?.cancel()
+        dismissTask = nil
+        panel?.orderOut(nil)
+    }
+
     private func makePanel() -> NSPanel {
         let panel = NSPanel(
             contentRect: NSRect(origin: .zero, size: Self.size),
