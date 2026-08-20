@@ -1,4 +1,5 @@
 import AppKit
+import DialsKit
 import SwiftUI
 
 // MARK: - Shared design vocabulary
@@ -199,6 +200,7 @@ struct DirectionTag: View {
 
 struct MenuBarContentView: View {
     @EnvironmentObject private var model: AppModel
+    @StateObject private var loginItem = LoginItem()
     @Environment(\.openWindow) private var openWindow
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -216,10 +218,41 @@ struct MenuBarContentView: View {
 
             Divider()
 
+            loginItemRow
+
             footer
         }
         .padding(14)
         .frame(width: 356)
+        // The item can be switched off in System Settings behind the app's back,
+        // so the real status is re-read every time the popover opens.
+        .onAppear { loginItem.refresh() }
+    }
+
+    // MARK: Login item
+
+    private var loginItemRow: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Toggle(isOn: Binding(get: { loginItem.isEnabled }, set: loginItem.setEnabled)) {
+                Text("Start at login")
+                    .font(.system(size: 11, weight: .medium))
+            }
+            .toggleStyle(.switch)
+            .controlSize(.mini)
+            .help(loginItem.explanation)
+            .accessibilityHint(loginItem.explanation)
+
+            if loginItem.needsApproval || loginItem.lastError != nil {
+                Text(loginItem.lastError ?? loginItem.explanation)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button("Open Login Items…") { loginItem.openLoginItemsSettings() }
+                    .buttonStyle(.link)
+                    .font(.system(size: 10))
+            }
+        }
+        .padding(.horizontal, 8)
     }
 
     // MARK: Header

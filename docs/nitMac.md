@@ -45,6 +45,7 @@ The framework is resolved with `dlsym` at run time. A macOS release that withdra
 - Its own HUD replaces the system one, which is swallowed along with the key press
 - A slider per display in the menu bar, usable without Accessibility access
 - Displays are rediscovered when the screen arrangement changes
+- A Start at login switch in the menu bar panel, registered through `SMAppService`
 
 ## Known limits
 

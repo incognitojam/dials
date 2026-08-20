@@ -12,13 +12,24 @@ let package = Package(
         .executable(name: "nitMac", targets: ["nitMac"])
     ],
     targets: [
+        .target(
+            name: "DialsKit",
+            path: "Sources/DialsKit"
+        ),
         .executableTarget(
             name: "neqMac",
+            dependencies: ["DialsKit"],
             path: "Sources/neqMac"
         ),
         .executableTarget(
             name: "nitMac",
+            dependencies: ["DialsKit"],
             path: "Sources/nitMac"
+        ),
+        .testTarget(
+            name: "DialsKitTests",
+            dependencies: ["DialsKit"],
+            path: "Tests/DialsKitTests"
         ),
         .testTarget(
             name: "neqMacTests",

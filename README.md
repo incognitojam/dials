@@ -31,6 +31,12 @@ open build/nitMac.app
 
 Both appear in the menu bar rather than the Dock.
 
+Code either app needs is in `Sources/DialsKit`; anything specific to one app stays in its own target.
+
+## Start at login
+
+Each app has a Start at login switch that registers it with `SMAppService`. macOS records the bundle's path, so an app that is moved after being switched on leaves a stale entry behind and stops starting. Move an app to where it will live, then turn the switch on there. Rebuilding in place is fine, because the bundle path and the signing identity both stay the same.
+
 ## Signing
 
 macOS ties permission grants to an app's signing identity, and an ad-hoc signature changes on every build, so a permission is dropped each time it is rebuilt. `build-app.sh` signs with a certificate named `<app> Local` when one exists and falls back to ad-hoc otherwise. To create one:

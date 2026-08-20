@@ -54,5 +54,6 @@ The headset may remain an allowed output while its input is excluded. “Never u
 - Optional routing of system alert sounds with the main output
 - Debounced Core Audio listener handling to avoid switch loops
 - Local in-memory activity timeline
+- A Start at login switch in the menu bar popover, registered through `SMAppService`
 
 Device rules use Core Audio UIDs rather than display names, so renaming a device does not create a second rule.
