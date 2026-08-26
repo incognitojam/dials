@@ -25,6 +25,12 @@ Build an ad-hoc signed menu-bar app:
 open build/nitMac.app
 ```
 
+Or install it to `~/Applications`:
+
+```sh
+./scripts/build-app.sh --install nitMac
+```
+
 nitMac appears in the menu bar rather than the Dock. Brightness keys need Accessibility access; the slider in the menu-bar panel works without it.
 
 Signing, and why the Accessibility grant survives a rebuild, is covered in the [root README](../README.md).

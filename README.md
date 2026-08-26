@@ -29,13 +29,23 @@ Build one app:
 open build/nitMac.app
 ```
 
+Install one app:
+
+```sh
+./scripts/build-app.sh --install nitMac
+```
+
+`--install` copies the built bundle to `~/Applications`, quitting a running copy first and relaunching it if it was running. A bundle left in `build/` works when opened by path but is invisible to Raycast, to Spotlight's application list and to the Open dialog, all of which only look in the Applications folders. Set `INSTALL_DIR` to install somewhere else.
+
 Both appear in the menu bar rather than the Dock.
 
 Code either app needs is in `Sources/DialsKit`; anything specific to one app stays in its own target.
 
 ## Start at login
 
-Each app has a Start at login switch that registers it with `SMAppService`. macOS records the bundle's path, so an app that is moved after being switched on leaves a stale entry behind and stops starting. Move an app to where it will live, then turn the switch on there. Rebuilding in place is fine, because the bundle path and the signing identity both stay the same.
+Each app has a Start at login switch that registers it with `SMAppService`. macOS records the bundle's path, so an app that is moved after being switched on leaves a stale entry behind and stops starting. Install an app to where it will live, then turn the switch on there. Rebuilding in place is fine, because the bundle path and the signing identity both stay the same, and so is `--install` over an existing installed copy.
+
+That makes the installed copy the one to switch on, not the one in `build/`. Switching it on in a `build/` copy registers a path inside the repository, which a `git clean` or a deleted worktree then strands.
 
 ## Signing
 
