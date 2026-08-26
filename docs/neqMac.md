@@ -36,6 +36,12 @@ Build an ad-hoc signed menu-bar app:
 open build/neqMac.app
 ```
 
+Or install it to `~/Applications`:
+
+```sh
+./scripts/build-app.sh --install neqMac
+```
+
 neqMac appears in the menu bar rather than the Dock. Automatic routing starts off, so the first launch does not change any audio device.
 
 ## First device test

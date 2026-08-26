@@ -5,9 +5,15 @@ set -euo pipefail
 SCRIPT_DIR=${0:A:h}
 PROJECT_DIR=${SCRIPT_DIR:h}
 
+INSTALL=0
+if [[ "${1:-}" == "--install" ]]; then
+    INSTALL=1
+    shift
+fi
+
 APP=${1:-}
 if [[ -z "$APP" ]]; then
-    print -u2 "usage: ${0:t} <app>"
+    print -u2 "usage: ${0:t} [--install] <app>"
     print -u2 "apps: $(ls "$PROJECT_DIR/Resources" | tr '\n' ' ')"
     exit 1
 fi
@@ -50,3 +56,29 @@ cp "$INFO_PLIST" "$CONTENTS_DIR/Info.plist"
 
 codesign --force --sign "$SIGN_IDENTITY" "$APP_BUNDLE"
 print "$APP_BUNDLE (signed by: $SIGN_IDENTITY)"
+
+if (( ! INSTALL )); then
+    exit 0
+fi
+
+INSTALL_DIR=${INSTALL_DIR:-$HOME/Applications}
+DEST="$INSTALL_DIR/$APP.app"
+BUNDLE_ID=$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$INFO_PLIST")
+
+WAS_RUNNING=0
+if pgrep -qf "$DEST/Contents/MacOS/$APP"; then
+    WAS_RUNNING=1
+fi
+osascript -e "quit app id \"$BUNDLE_ID\"" 2>/dev/null || true
+
+mkdir -p "$INSTALL_DIR"
+rm -rf "$DEST"
+ditto "$APP_BUNDLE" "$DEST"
+codesign --verify --strict "$DEST"
+
+print "$DEST"
+
+if (( WAS_RUNNING )); then
+    open "$DEST"
+    print "Relaunched."
+fi
