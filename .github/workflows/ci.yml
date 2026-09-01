@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test
+    runs-on: macos-15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+      - name: Run tests
+        run: swift test
+
+  build:
+    name: Build ${{ matrix.app }}
+    runs-on: macos-15
+    strategy:
+      fail-fast: false
+      matrix:
+        app:
+          - neqMac
+          - nitMac
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+      - name: Build app
+        run: ./scripts/build-app.sh "${{ matrix.app }}"
+      - name: Verify signature
+        run: codesign --verify --strict "build/${{ matrix.app }}.app"
+      - name: Archive app
+        run: ditto -c -k --sequesterRsrc --keepParent "build/${{ matrix.app }}.app" "build/${{ matrix.app }}.zip"
+      - name: Upload app
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ matrix.app }}
+          path: build/${{ matrix.app }}.zip
+          if-no-files-found: error
