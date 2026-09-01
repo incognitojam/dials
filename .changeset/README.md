@@ -1,9 +1,11 @@
 # Changesets
 
-Add a changeset to every pull request that changes an app's user-visible behaviour:
+Every pull request must include a release decision:
 
 ```sh
 npm run changeset
 ```
 
-Select `@dials/neqmac`, `@dials/nitmac`, or both, then describe the change for the generated app changelog. Repository-only changes do not need a changeset.
+Select `@dials/neqmac`, `@dials/nitmac`, or both, then describe a visible change in user-facing language. For internal work that should not appear in either changelog, run `npm run changeset -- --empty`.
+
+See [the release guide](../docs/releases.md) for the complete workflow.

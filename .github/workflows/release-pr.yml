@@ -1,24 +1,26 @@
-name: Changelog
+name: Release PR
 
 on:
   push:
     branches:
       - main
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  workflow_dispatch:
 
 permissions:
   contents: write
   pull-requests: write
 
+concurrency:
+  group: release-pr
+  cancel-in-progress: false
+
 jobs:
-  changelog:
-    name: Update changelogs
+  version:
+    name: Version apps
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: Set up Node.js
@@ -28,12 +30,10 @@ jobs:
           cache: npm
       - name: Install dependencies
         run: npm ci
-      - name: Create or update changelog pull request
-        uses: changesets/action@v2
+      - name: Create or update release pull request
+        uses: changesets/action/version@v2.1.1
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          version-script: npm run version
-          commit-message: "chore(release): version apps"
-          pr-title: "chore(release): version apps"
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          script: npm run release:version
+          commit-message: "release: version apps"
+          pr-title: "release: version apps"

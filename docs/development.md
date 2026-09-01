@@ -44,18 +44,9 @@ Both apps appear in the menu bar rather than the Dock.
 
 Shared code belongs in `Sources/DialsKit`; app-specific code stays in its own target.
 
-## Changelogs
+## Releases
 
-Changesets keeps an independent version and changelog for each app. After making a user-visible change, run:
-
-```sh
-npm ci
-npm run changeset
-```
-
-Select the affected app or apps and commit the generated file in `.changeset/`. When changesets reach `main`, GitHub Actions creates or updates a release pull request containing the version bumps and generated changelogs. The version command also copies each app version into its `Info.plist`.
-
-For the workflow to open the release pull request, enable **Allow GitHub Actions to create and approve pull requests** in the repository's Actions settings.
+Every pull request records its release impact. See the [release instructions](releases.md) for adding and publishing changesets.
 
 ## Start at login
 
