@@ -6,10 +6,11 @@
   ],
   "scripts": {
     "changeset": "changeset",
-    "version": "changeset version && node scripts/sync-app-versions.mjs"
+    "release:version": "changeset version && npm run version:sync",
+    "version:sync": "node scripts/sync-app-versions.mjs",
+    "version:check": "node scripts/sync-app-versions.mjs --check"
   },
   "devDependencies": {
-    "@changesets/changelog-github": "1.0.0",
     "@changesets/cli": "3.0.1"
   },
   "engines": {

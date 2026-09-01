@@ -2,20 +2,63 @@ name: CI
 
 on:
   pull_request:
-  push:
-    branches:
-      - main
 
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
+  changeset:
+    name: Changeset
+    if: ${{ !startsWith(github.head_ref, 'changeset-release/') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Require a release decision
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          found=0
+          while IFS= read -r changed_file; do
+            case "$changed_file" in
+              .changeset/*.md)
+                if [ "$changed_file" != ".changeset/README.md" ]; then
+                  found=1
+                fi
+                ;;
+            esac
+          done < <(git diff --name-only --diff-filter=AM "$BASE_SHA...$HEAD_SHA" -- .changeset)
+          if [ "$found" -ne 1 ]; then
+            echo "Add a release note with 'npm run changeset' or record no release impact with 'npm run changeset -- --empty'." >&2
+            exit 1
+          fi
+      - name: Validate changesets
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: npm run changeset -- status --since "$BASE_SHA"
+      - name: Check app versions
+        run: npm run version:check
+
   test:
     name: Test
     runs-on: macos-26
     steps:
       - name: Check out repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
       - name: Run tests
         run: swift test
 
@@ -30,7 +73,7 @@ jobs:
           - nitMac
     steps:
       - name: Check out repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
       - name: Build app
         run: ./scripts/build-app.sh "${{ matrix.app }}"
       - name: Verify signature

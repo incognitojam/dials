@@ -11,4 +11,4 @@ Both run on macOS 14 or later and live in the menu bar. Build and install one wi
 
 nitMac relies on `DisplayServices`, a private macOS framework, so a future macOS release may stop it from controlling displays.
 
-[Development instructions](docs/development.md)
+[Development instructions](docs/development.md) · [Release instructions](docs/releases.md)

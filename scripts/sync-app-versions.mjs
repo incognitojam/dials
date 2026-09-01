@@ -5,6 +5,11 @@ import { fileURLToPath } from "node:url";
 const projectDirectory = dirname(dirname(fileURLToPath(import.meta.url)));
 const resourcesDirectory = join(projectDirectory, "Resources");
 const versionKey = /(<key>CFBundleShortVersionString<\/key>\s*<string>)[^<]*(<\/string>)/g;
+const checkOnly = process.argv.slice(2).includes("--check");
+
+if (process.argv.slice(2).some((argument) => argument !== "--check")) {
+  throw new Error("usage: node scripts/sync-app-versions.mjs [--check]");
+}
 
 for (const entry of await readdir(resourcesDirectory, { withFileTypes: true })) {
   if (!entry.isDirectory()) continue;
@@ -33,5 +38,13 @@ for (const entry of await readdir(resourcesDirectory, { withFileTypes: true })) 
   }
 
   const updatedPlist = plist.replace(versionKey, `$1${packageJson.version}$2`);
-  if (updatedPlist !== plist) await writeFile(plistPath, updatedPlist);
+  if (updatedPlist === plist) continue;
+
+  if (checkOnly) {
+    throw new Error(
+      `${entry.name} version mismatch: package.json is ${packageJson.version}. Run npm run version:sync.`,
+    );
+  }
+
+  await writeFile(plistPath, updatedPlist);
 }
