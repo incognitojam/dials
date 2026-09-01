@@ -65,11 +65,26 @@ INSTALL_DIR=${INSTALL_DIR:-$HOME/Applications}
 DEST="$INSTALL_DIR/$APP.app"
 BUNDLE_ID=$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$INFO_PLIST")
 
+app_is_running() {
+    [[ "$(osascript -e "application id \"$BUNDLE_ID\" is running" 2>/dev/null || true)" == "true" ]]
+}
+
 WAS_RUNNING=0
-if pgrep -qf "$DEST/Contents/MacOS/$APP"; then
+if app_is_running; then
     WAS_RUNNING=1
 fi
 osascript -e "quit app id \"$BUNDLE_ID\"" 2>/dev/null || true
+
+if (( WAS_RUNNING )); then
+    for _ in {1..50}; do
+        app_is_running || break
+        sleep 0.1
+    done
+    if app_is_running; then
+        print -u2 "Could not quit $APP; the installed app was not replaced."
+        exit 1
+    fi
+fi
 
 mkdir -p "$INSTALL_DIR"
 rm -rf "$DEST"
@@ -79,6 +94,6 @@ codesign --verify --strict "$DEST"
 print "$DEST"
 
 if (( WAS_RUNNING )); then
-    open "$DEST"
+    open -n "$DEST"
     print "Relaunched."
 fi
