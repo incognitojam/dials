@@ -1,0 +1,19 @@
+{
+  "name": "dials",
+  "private": true,
+  "workspaces": [
+    "Resources/*"
+  ],
+  "scripts": {
+    "changeset": "changeset",
+    "version": "changeset version && node scripts/sync-app-versions.mjs"
+  },
+  "devDependencies": {
+    "@changesets/changelog-github": "1.0.0",
+    "@changesets/cli": "3.0.1"
+  },
+  "engines": {
+    "node": "^22.11 || ^24 || >=26",
+    "npm": ">=10.9.0"
+  }
+}
