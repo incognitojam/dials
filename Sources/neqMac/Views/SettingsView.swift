@@ -401,7 +401,11 @@ private struct DeviceRuleRow: View {
 
             HStack(spacing: 2) {
                 Button {
-                    model.moveRule(direction: rule.direction, id: rule.id, offset: -1)
+                    if NSEvent.modifierFlags.contains(.command) {
+                        model.moveRule(direction: rule.direction, id: rule.id, to: .first)
+                    } else {
+                        model.moveRule(direction: rule.direction, id: rule.id, offset: -1)
+                    }
                 } label: {
                     Image(systemName: "chevron.up")
                         .frame(width: 22, height: 20)
@@ -409,11 +413,16 @@ private struct DeviceRuleRow: View {
                 }
                 .buttonStyle(.borderless)
                 .disabled(isFirst)
-                .help("Move \(rule.name) up the \(rule.direction.rawValue) priority order")
+                .help("Move \(rule.name) up one place. Command-click to move it to the top.")
                 .accessibilityLabel("Increase priority of \(rule.name)")
+                .accessibilityHint("Command-click to move to the top")
 
                 Button {
-                    model.moveRule(direction: rule.direction, id: rule.id, offset: 1)
+                    if NSEvent.modifierFlags.contains(.command) {
+                        model.moveRule(direction: rule.direction, id: rule.id, to: .last)
+                    } else {
+                        model.moveRule(direction: rule.direction, id: rule.id, offset: 1)
+                    }
                 } label: {
                     Image(systemName: "chevron.down")
                         .frame(width: 22, height: 20)
@@ -421,8 +430,9 @@ private struct DeviceRuleRow: View {
                 }
                 .buttonStyle(.borderless)
                 .disabled(isLast)
-                .help("Move \(rule.name) down the \(rule.direction.rawValue) priority order")
+                .help("Move \(rule.name) down one place. Command-click to move it to the bottom.")
                 .accessibilityLabel("Decrease priority of \(rule.name)")
+                .accessibilityHint("Command-click to move to the bottom")
             }
 
             Toggle("Never use", isOn: Binding(
