@@ -86,9 +86,8 @@ final class BrightnessHUD {
         panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary, .ignoresCycle]
         let hosting = OpaqueHostingView(rootView: BrightnessHUDView().environmentObject(level))
 
-        // The glass itself is applied inside the SwiftUI view, which is where
-        // the real material lives; AppKit's NSGlassEffectView is a flatter
-        // approximation that renders no lensing and no specular edge.
+        // SwiftUI owns the glass material so macOS can update its rendering
+        // and respond to the system's Liquid Glass appearance preference.
         hosting.frame = NSRect(origin: .zero, size: Self.size)
         hosting.autoresizingMask = [.width, .height]
         panel.contentView = hosting
@@ -148,10 +147,9 @@ struct BrightnessHUDView: View {
         static let glyphGap: CGFloat = 6
         static let trackHeight: CGFloat = 4
         static let cornerRadius: CGFloat = 22
-        /// The system indicator carries a specular edge in both modes, and
-        /// `glassEffect` does not draw one, so it is drawn here. Measured off the
-        /// system indicator: 152 over an interior of 50 with glass, 130 over 34
-        /// with transparency reduced. 0.75pt reproduces its two-pixel falloff.
+        /// Legacy rim measured off Tahoe's system indicator: 152 over an
+        /// interior of 50 with glass, 130 over 34 with transparency reduced.
+        /// Golden Gate supplies its own edge and specular highlights.
         static let rimOpacityGlass: Double = 0.50
         static let rimOpacityFlat: Double = 0.43
         static let rimWidth: CGFloat = 0.75
@@ -178,15 +176,16 @@ struct BrightnessHUDView: View {
         .padding(.top, Metrics.topPadding)
         .frame(width: 292, height: 64, alignment: .top)
         .hudGlass(cornerRadius: Metrics.cornerRadius)
-        // Reduce Transparency flattens every material to an opaque fill, which
-        // costs the panel the edge that separates it from the desktop. The system
-        // indicator carries a slightly softer edge in that case.
         .overlay {
-            RoundedRectangle(cornerRadius: Metrics.cornerRadius, style: .continuous)
-                .strokeBorder(
-                    ink.opacity(reduceTransparency ? Metrics.rimOpacityFlat : Metrics.rimOpacityGlass),
-                    lineWidth: Metrics.rimWidth
-                )
+            // On macOS 27, let the material draw its edge and adapt it to the
+            // appearance slider and accessibility settings without a fixed rim.
+            if #unavailable(macOS 27.0) {
+                RoundedRectangle(cornerRadius: Metrics.cornerRadius, style: .continuous)
+                    .strokeBorder(
+                        ink.opacity(reduceTransparency ? Metrics.rimOpacityFlat : Metrics.rimOpacityGlass),
+                        lineWidth: Metrics.rimWidth
+                    )
+            }
         }
         .accessibilityElement()
         .accessibilityLabel(level.title)
@@ -216,7 +215,9 @@ private struct BrightnessTrack: View {
 
 
 private extension View {
-    /// Liquid Glass proper, with the pre-Tahoe material as the fallback.
+    /// Regular glass follows the system's appearance preference, including
+    /// Golden Gate's slider. `Glass.clear` is a different material variant,
+    /// not the system preference for more transparent regular glass.
     @ViewBuilder
     func hudGlass(cornerRadius: CGFloat) -> some View {
         let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)

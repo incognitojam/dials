@@ -11,7 +11,7 @@ Where the curves it applies come from, and the format they are stored in, is cov
 ## Requirements
 
 - macOS 14 or later
-- Xcode 16 or later, including the macOS SDK and command-line tools
+- Xcode 26 or later, including the macOS SDK and command-line tools
 
 Check the active toolchain with:
 
