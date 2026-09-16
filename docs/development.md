@@ -3,7 +3,19 @@
 ## Requirements
 
 - macOS 14 or later
-- Xcode 16 or later, including the macOS SDK and command-line tools
+- Xcode 26 or later, including the macOS SDK and command-line tools (the HUD uses the macOS 26 Liquid Glass API)
+
+## macOS 27 Golden Gate
+
+Both apps retain macOS 14 as their minimum deployment target. Golden Gate does not require a new glass API: Apple confirms that existing Liquid Glass views receive the updated material and system appearance slider automatically, even without recompilation. See [Platforms State of the Union, WWDC26](https://developer.apple.com/videos/play/wwdc2026/102/).
+
+nitMac's HUD uses `glassEffect(.regular, in:)` on macOS 26 and later, with `.regularMaterial` on older releases. On macOS 27, the material supplies the edge and specular highlights; the fixed rim measured on Tahoe is only applied on older releases. The menu bar panels in both apps use SwiftUI's standard `MenuBarExtra` window presentation.
+
+The Liquid Glass slider in System Settings > Appearance is separate from Accessibility > Display > Reduce Transparency and Increase Contrast. Leave material adaptation to the system. In particular, `Glass.clear` is a variant intended for controls over rich visual content, not a way to follow the user's transparency preference. See Apple's [materials guidance](https://developer.apple.com/design/human-interface-guidelines/materials).
+
+macOS 27 also adds AppKit interactive glass effects and container-concentric corners, described in [Modernize your AppKit app](https://developer.apple.com/videos/play/wwdc2026/289/). The non-interactive HUD does not need those APIs. Use Xcode 27 and the macOS 27 SDK when adopting APIs introduced in that release.
+
+For visual verification on Golden Gate, check both menu bar panels and the brightness HUD in light and dark appearances, at both ends of the Liquid Glass slider, and with Reduce Transparency and Increase Contrast enabled. Change the settings while the app remains running to check that the reused HUD updates. Also check brightness keys and the slider with an adjustable external monitor: the private DisplayServices integration needs hardware verification on each macOS release.
 
 ## Build and run
 

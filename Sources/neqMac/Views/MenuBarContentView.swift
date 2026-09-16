@@ -125,7 +125,9 @@ struct StatusBadge: View {
                 .font(.system(size: 10, weight: .semibold))
                 .fixedSize()
         }
-        .foregroundStyle(prominent ? tint : Color.secondary)
+        // Keep small labels legible over glass; tint belongs to the pill's
+        // background and border rather than its text.
+        .foregroundStyle(prominent ? Color.primary : Color.secondary)
         .padding(.horizontal, 6)
         .padding(.vertical, 2)
         .background(
@@ -190,7 +192,7 @@ struct DirectionTag: View {
                 .font(.system(size: 9, weight: .semibold))
                 .foregroundStyle(.secondary)
         }
-        .foregroundStyle(RouteStyle.tint(for: direction))
+        .foregroundStyle(.primary)
         .accessibilityElement()
         .accessibilityLabel(direction.title)
     }
@@ -261,10 +263,14 @@ struct MenuBarContentView: View {
         HStack(alignment: .center, spacing: 10) {
             ZStack {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(Color.accentColor.opacity(0.14))
+                    .fill(Color.accentColor.opacity(0.28))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .strokeBorder(Color.accentColor.opacity(0.25), lineWidth: 0.75)
+                    }
                 Image(systemName: "waveform.path")
                     .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(Color.accentColor)
+                    .foregroundStyle(.primary)
             }
             .frame(width: 30, height: 30)
             .accessibilityHidden(true)

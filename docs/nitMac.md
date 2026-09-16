@@ -7,7 +7,7 @@ A nit is the unit of display luminance, which is the one thing this app touches.
 ## Requirements
 
 - macOS 14 or later
-- Xcode 16 or later, including the macOS SDK and command-line tools
+- Xcode 26 or later, including the macOS SDK and command-line tools
 - An external display macOS reports as adjustable
 
 ## Build and run
