@@ -55,6 +55,19 @@ struct DeviceRule: Identifiable, Codable, Equatable, Sendable {
     var isExcluded: Bool
 
     var id: String { "\(direction.rawValue):\(uid)" }
+
+    var airPlayName: String? {
+        guard transportLabel == "AirPlay", name != AudioDevice.unknownName, !name.isEmpty else {
+            return nil
+        }
+        return name
+    }
+
+    func matches(_ device: AudioDevice) -> Bool {
+        guard direction == device.direction else { return false }
+        if uid == device.uid { return true }
+        return device.transportType == kAudioDeviceTransportTypeAirPlay && airPlayName == device.name
+    }
 }
 
 struct RoutingEvent: Identifiable, Equatable, Sendable {

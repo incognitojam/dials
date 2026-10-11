@@ -396,8 +396,8 @@ private struct RouteCard: View {
     }
 
     private var currentState: RouteSlotState {
-        guard let device = currentDevice else { return .offline }
-        let rule = rules.first { $0.uid == device.uid }
+        guard currentDevice != nil else { return .offline }
+        let rule = rules.first { model.isCurrent($0) }
         return RouteSlotState(
             isConnected: true,
             isCurrent: true,
