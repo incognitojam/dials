@@ -23,20 +23,20 @@ final class AppModel: ObservableObject {
     @Published private(set) var manualInputOverrideUID: String?
     @Published private(set) var manualOutputOverrideUID: String?
 
-    private let audioClient: CoreAudioClient
+    private let audioClient: AudioDeviceClient
     private let persistence: PolicyPersisting
     private var reconciliationWorkItem: DispatchWorkItem?
     private var lastDeviceIDs = Set<String>()
     private var hasLoadedInitialState = false
 
     init(
-        audioClient: CoreAudioClient = CoreAudioClient(),
+        audioClient: AudioDeviceClient = CoreAudioClient(),
         persistence: PolicyPersisting = UserDefaultsPolicyStore()
     ) {
         self.audioClient = audioClient
         self.persistence = persistence
         let loadedPolicy = persistence.load()
-        let repairedPolicy = Self.repairUnknownRuleNames(in: loadedPolicy)
+        let repairedPolicy = Self.repairSavedRules(in: loadedPolicy)
         self.policy = repairedPolicy
         if repairedPolicy != loadedPolicy {
             persistence.save(repairedPolicy)
@@ -76,7 +76,11 @@ final class AppModel: ObservableObject {
     }
 
     func device(for rule: DeviceRule) -> AudioDevice? {
-        devices.first { $0.uid == rule.uid && $0.direction == rule.direction }
+        let matches = devices.filter { rule.matches($0) }
+        let currentID = rule.direction == .input ? defaultInputID : defaultOutputID
+        return matches.first { $0.audioObjectID == currentID }
+            ?? matches.first { $0.uid == rule.uid }
+            ?? matches.first
     }
 
     func isCurrent(_ rule: DeviceRule) -> Bool {
@@ -189,11 +193,12 @@ final class AppModel: ObservableObject {
             lastError = nil
             mergeRules(with: refreshedDevices)
 
-            let newIDs = Set(refreshedDevices.map(\.id))
+            let connectedRules = allRules.filter { device(for: $0) != nil }
+            let newIDs = Set(connectedRules.map(\.id))
             if hasLoadedInitialState {
                 for connectedID in newIDs.subtracting(lastDeviceIDs) {
-                    if let device = refreshedDevices.first(where: { $0.id == connectedID }) {
-                        appendEvent("Connected \(device.name) · \(device.direction.title)", level: .success)
+                    if let rule = connectedRules.first(where: { $0.id == connectedID }) {
+                        appendEvent("Connected \(rule.name) · \(rule.direction.title)", level: .success)
                     }
                 }
                 for disconnectedID in lastDeviceIDs.subtracting(newIDs) {
@@ -245,9 +250,26 @@ final class AppModel: ObservableObject {
         discovered: [AudioDevice],
         currentID: AudioObjectID
     ) -> [DeviceRule] {
-        var rules = existing
+        let airPlayNames = Set(existing.compactMap(\.airPlayName)).union(
+            discovered.filter {
+                $0.transportType == kAudioDeviceTransportTypeAirPlay
+                    && $0.name != AudioDevice.unknownName && !$0.name.isEmpty
+            }.map(\.name)
+        )
+        var rules = existing.map { rule in
+            guard rule.transportLabel == "Audio device", airPlayNames.contains(rule.name),
+                  !discovered.contains(where: {
+                      $0.uid == rule.uid && $0.transportType != kAudioDeviceTransportTypeUnknown
+                          && $0.transportType != kAudioDeviceTransportTypeAirPlay
+                  }) else { return rule }
+            // Transport metadata was missing in older builds. Recover aliases
+            // by the exact name of a known AirPlay receiver before merging.
+            var repaired = rule
+            repaired.transportLabel = "AirPlay"
+            return repaired
+        }
         for device in discovered {
-            if let index = rules.firstIndex(where: { $0.uid == device.uid }) {
+            if let index = rules.firstIndex(where: { $0.matches(device) }) {
                 if device.name != AudioDevice.unknownName {
                     rules[index].name = device.name
                 }
@@ -260,14 +282,30 @@ final class AppModel: ObservableObject {
                     transportLabel: device.transportLabel,
                     isExcluded: false
                 )
-                if device.audioObjectID == currentID {
+                if discovered.contains(where: { $0.audioObjectID == currentID && newRule.matches($0) }) {
                     rules.insert(newRule, at: 0)
                 } else {
                     rules.append(newRule)
                 }
             }
         }
-        return rules
+        return Self.deduplicatedAirPlayRules(in: rules)
+    }
+
+    private static func deduplicatedAirPlayRules(in rules: [DeviceRule]) -> [DeviceRule] {
+        var uniqueRules: [DeviceRule] = []
+        for rule in rules {
+            if let name = rule.airPlayName,
+               let index = uniqueRules.firstIndex(where: {
+                   $0.direction == rule.direction && $0.airPlayName == name
+               }) {
+                // Keep the highest priority and honor any saved "Never use" choice.
+                uniqueRules[index].isExcluded = uniqueRules[index].isExcluded || rule.isExcluded
+            } else {
+                uniqueRules.append(rule)
+            }
+        }
+        return uniqueRules
     }
 
     private func restoreKnownNames(in discovered: [AudioDevice]) -> [AudioDevice] {
@@ -287,7 +325,7 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private static func repairUnknownRuleNames(in policy: PersistedPolicy) -> PersistedPolicy {
+    private static func repairSavedRules(in policy: PersistedPolicy) -> PersistedPolicy {
         var repaired = policy
         let knownRules = (policy.inputRules + policy.outputRules).filter {
             $0.name != AudioDevice.unknownName
@@ -305,7 +343,29 @@ final class AppModel: ObservableObject {
                 repaired.outputRules[index].name = known.name
             }
         }
+        // Older builds lost transport metadata. Recover known AirPlay UID formats.
+        for index in repaired.inputRules.indices
+            where isLegacyAirPlayRule(repaired.inputRules[index]) {
+            repaired.inputRules[index].transportLabel = "AirPlay"
+        }
+        for index in repaired.outputRules.indices
+            where isLegacyAirPlayRule(repaired.outputRules[index]) {
+            repaired.outputRules[index].transportLabel = "AirPlay"
+        }
+        repaired.inputRules = deduplicatedAirPlayRules(in: repaired.inputRules)
+        repaired.outputRules = deduplicatedAirPlayRules(in: repaired.outputRules)
         return repaired
+    }
+
+    private static func isLegacyAirPlayRule(_ rule: DeviceRule) -> Bool {
+        guard rule.transportLabel == "Audio device" else { return false }
+        let uid = rule.uid.lowercased()
+        let isMirroringSession = uid.range(
+            of: #"^(?:[0-9a-f]{2}:){5}[0-9a-f]{2}-.+-screen$"#,
+            options: .regularExpression
+        ) != nil
+        return uid.hasSuffix("-airplay") || isMirroringSession
+            || (rule.name == "AirPlay" && uid.hasSuffix("-audio"))
     }
 
     private static func knownRule(for uid: String, in rules: [DeviceRule]) -> DeviceRule? {
@@ -348,14 +408,15 @@ final class AppModel: ObservableObject {
     }
 
     private func reconcile(direction: DeviceDirection, reason: String) {
-        let directionalDevices = devices.filter { $0.direction == direction }
-        let availableUIDs = Set(directionalDevices.map(\.uid))
+        let directionalRules = rules(for: direction)
+        let availableUIDs = Set(directionalRules.filter { device(for: $0) != nil }.map(\.uid))
         let override = direction == .input ? manualInputOverrideUID : manualOutputOverrideUID
         guard let targetUID = RoutingDecisionEngine.targetUID(
-            rules: rules(for: direction),
+            rules: directionalRules,
             availableUIDs: availableUIDs,
             manualOverrideUID: override
-        ), let target = directionalDevices.first(where: { $0.uid == targetUID }) else {
+        ), let targetRule = directionalRules.first(where: { $0.uid == targetUID }),
+           let target = device(for: targetRule) else {
             appendEvent("No allowed \(direction.rawValue) device is available", level: .warning)
             return
         }
@@ -386,12 +447,12 @@ final class AppModel: ObservableObject {
 
     private func clearUnavailableOverrides() {
         if let manualInputOverrideUID,
-           !inputDevices.contains(where: { $0.uid == manualInputOverrideUID }) {
+           !policy.inputRules.contains(where: { $0.uid == manualInputOverrideUID && device(for: $0) != nil }) {
             self.manualInputOverrideUID = nil
             appendEvent("Input override ended because the device disconnected", level: .info)
         }
         if let manualOutputOverrideUID,
-           !outputDevices.contains(where: { $0.uid == manualOutputOverrideUID }) {
+           !policy.outputRules.contains(where: { $0.uid == manualOutputOverrideUID && device(for: $0) != nil }) {
             self.manualOutputOverrideUID = nil
             appendEvent("Output override ended because the device disconnected", level: .info)
         }

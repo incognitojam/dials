@@ -28,7 +28,15 @@ enum CoreAudioError: LocalizedError {
     }
 }
 
-final class CoreAudioClient {
+protocol AudioDeviceClient: AnyObject {
+    var onHardwareChange: (() -> Void)? { get set }
+    func devices() throws -> [AudioDevice]
+    func defaultDeviceID(for direction: DeviceDirection) throws -> AudioObjectID
+    func defaultSystemOutputDeviceID() throws -> AudioObjectID
+    func setDefaultDevice(_ device: AudioDevice, includeSystemSounds: Bool) throws
+}
+
+final class CoreAudioClient: AudioDeviceClient {
     private let systemObject = AudioObjectID(kAudioObjectSystemObject)
     private var listenerBlock: AudioObjectPropertyListenerBlock?
 
@@ -64,11 +72,12 @@ final class CoreAudioClient {
                 selector: kAudioObjectPropertyName,
                 scope: kAudioObjectPropertyScopeGlobal
             )) ?? AudioDevice.unknownName
-            let transport: UInt32 = (try? readScalar(
+            // Constrain the generic read inside try? so its storage is UInt32, not Optional<UInt32>.
+            let transport = (try? readScalar(
                 objectID: id,
                 selector: kAudioDevicePropertyTransportType,
                 scope: kAudioObjectPropertyScopeGlobal
-            )) ?? 0
+            ) as UInt32) ?? kAudioDeviceTransportTypeUnknown
 
             var result: [AudioDevice] = []
             if hasStreams(deviceID: id, scope: kAudioDevicePropertyScopeInput) {

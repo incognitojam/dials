@@ -66,4 +66,4 @@ The headset may remain an allowed output while its input is excluded. “Never u
 - Local in-memory activity timeline
 - A Start at login switch in the menu bar popover, registered through `SMAppService`
 
-Device rules use Core Audio UIDs rather than display names, so renaming a device does not create a second rule.
+Device rules use Core Audio UIDs, so renaming a device does not create a second rule. AirPlay devices are also matched by their exact display name within each direction, so changing UIDs does not fill the list with duplicates. Existing AirPlay duplicates collapse into their highest-priority entry, keeping “Never use” enabled if any duplicate was excluded. Older rules with a generic transport label are repaired when their UID identifies AirPlay (including screen-mirroring sessions) or their name matches a known AirPlay receiver; live devices with another known transport stay separate. AirPlay receivers with the same name share one rule; give them distinct names to manage them separately.
