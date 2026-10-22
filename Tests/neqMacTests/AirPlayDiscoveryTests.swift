@@ -163,6 +163,30 @@ final class AirPlayDiscoveryTests: XCTestCase {
         XCTAssertEqual(store.savedPolicy, model.policy)
     }
 
+    func testArrangingAPinnedDeviceIntoNeverUseClearsThePin() {
+        let speakers = device(1, uid: "speakers", name: "Speakers", transport: kAudioDeviceTransportTypeBuiltIn)
+        let dac = device(2, uid: "dac", name: "DAC", transport: kAudioDeviceTransportTypeUSB)
+        let store = MemoryPolicyStore(PersistedPolicy(outputRules: [
+            rule("speakers", name: "Speakers", transport: "Built-in"),
+            rule("dac", name: "DAC", transport: "USB")
+        ]))
+        let model = AppModel(
+            audioClient: TestAudioClient(devices: [speakers, dac], outputID: speakers.audioObjectID),
+            persistence: store
+        )
+        let ids = model.policy.outputRules.map(\.id)
+
+        model.useNow(model.policy.outputRules[1])
+        XCTAssertEqual(model.manualOutputOverrideUID, "dac")
+
+        model.arrange(direction: .output, allowed: [ids[0]], excluded: [ids[1]])
+
+        XCTAssertNil(model.manualOutputOverrideUID)
+        XCTAssertEqual(model.policy.outputRules.map(\.isExcluded), [false, true])
+        XCTAssertEqual(model.events.first?.message, "Excluded DAC as an output")
+        XCTAssertEqual(store.savedPolicy, model.policy)
+    }
+
     func testSerialLessUSBDeviceKeepsOneRuleAcrossPorts() {
         let dock = "AppleUSBAudioEngine:Vendor:Desk DAC:1100000:1"
         let directPort = "AppleUSBAudioEngine:Vendor:Desk DAC:120000:1"

@@ -48,7 +48,7 @@ neqMac appears in the menu bar rather than the Dock. Automatic routing starts of
 
 1. Open **Routing preferences…** from the neqMac menu-bar panel.
 2. Drag the preferred fallback output above **Mac Speakers**.
-3. In **Input priority**, enable **Never use** for the Bluetooth headset microphone.
+3. In **Input**, drag the Bluetooth headset microphone below **Never use**.
 4. Turn on **Automatic routing**.
 5. Connect and disconnect the headset, then sleep and wake the Mac.
 6. Check **Activity** to confirm why each change occurred.
@@ -58,9 +58,10 @@ The headset may remain an allowed output while its input is excluded. “Never u
 ## Current behaviour
 
 - Independent persisted priority lists for inputs and outputs, reordered by dragging a row (or from its context menu)
-- Removal of disconnected devices from either list with **Edit**; a removed device is added back if it reconnects
+- **Edit** selects several devices at once to exclude, allow or remove; only disconnected devices can be removed, and a removed device is added back if it reconnects
 - A transport icon on each device; rules saved without transport metadata infer USB, Bluetooth or built-in from their UID
-- Persisted per-direction exclusions
+- Persisted per-direction exclusions, shown as a **Never use** group below each priority list; drag a device across the divider, or use its context menu, to exclude or allow it
+- **Use Now** on hover, or double-click a row, to switch to a device and pin it
 - Automatic fallback when devices appear or disappear
 - Manual overrides that end when the chosen device disconnects
 - Optional routing of system alert sounds with the main output

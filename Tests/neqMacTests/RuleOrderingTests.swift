@@ -2,58 +2,43 @@ import XCTest
 @testable import neqMac
 
 final class RuleOrderingTests: XCTestCase {
-    func testMovingRuleToFirstPreservesOtherRulesOrder() {
-        let rules = [rule("one"), rule("two"), rule("three"), rule("four")]
+    func testArrangingPlacesAllowedBeforeExcluded() {
+        let rules = [rule("one"), rule("two", excluded: true), rule("three"), rule("four")]
 
-        let reordered = RuleOrdering.moving(rules[2].id, to: .first, in: rules)
+        let arranged = RuleOrdering.arranged(rules, allowed: ids("four", "one"), excluded: ids("two", "three"))
 
-        XCTAssertEqual(reordered.map(\.uid), ["three", "one", "two", "four"])
+        XCTAssertEqual(arranged.map(\.uid), ["four", "one", "two", "three"])
+        XCTAssertEqual(arranged.map(\.isExcluded), [false, false, true, true])
     }
 
-    func testMovingRuleToLastPreservesOtherRulesOrder() {
-        let rules = [rule("one"), rule("two"), rule("three"), rule("four")]
+    func testArrangingAllowsAPreviouslyExcludedRule() {
+        let rules = [rule("one"), rule("two", excluded: true)]
 
-        let reordered = RuleOrdering.moving(rules[1].id, to: .last, in: rules)
+        let arranged = RuleOrdering.arranged(rules, allowed: ids("two", "one"), excluded: [])
 
-        XCTAssertEqual(reordered.map(\.uid), ["one", "three", "four", "two"])
+        XCTAssertEqual(arranged.map(\.uid), ["two", "one"])
+        XCTAssertEqual(arranged.map(\.isExcluded), [false, false])
     }
 
-    func testUnknownRuleLeavesOrderUnchanged() {
-        let rules = [rule("one"), rule("two")]
-
-        XCTAssertEqual(RuleOrdering.moving("missing", to: .first, in: rules), rules)
-    }
-
-    func testMovingRuleDownToIndexPlacesItThere() {
-        let rules = [rule("one"), rule("two"), rule("three"), rule("four")]
-
-        let reordered = RuleOrdering.moving(rules[0].id, to: 2, in: rules)
-
-        XCTAssertEqual(reordered.map(\.uid), ["two", "three", "one", "four"])
-    }
-
-    func testMovingRuleUpToIndexPlacesItThere() {
-        let rules = [rule("one"), rule("two"), rule("three"), rule("four")]
-
-        let reordered = RuleOrdering.moving(rules[3].id, to: 1, in: rules)
-
-        XCTAssertEqual(reordered.map(\.uid), ["one", "four", "two", "three"])
-    }
-
-    func testMovingRuleToOutOfRangeIndexClampsToEnds() {
+    func testArrangingKeepsUnmentionedRulesAndIgnoresUnknownIDs() {
         let rules = [rule("one"), rule("two"), rule("three")]
 
-        XCTAssertEqual(RuleOrdering.moving(rules[0].id, to: 9, in: rules).map(\.uid), ["two", "three", "one"])
-        XCTAssertEqual(RuleOrdering.moving(rules[2].id, to: -1, in: rules).map(\.uid), ["three", "one", "two"])
+        let arranged = RuleOrdering.arranged(rules, allowed: ids("three", "missing"), excluded: [])
+
+        XCTAssertEqual(arranged.map(\.uid), ["three", "one", "two"])
     }
 
-    private func rule(_ uid: String) -> DeviceRule {
+    private func ids(_ uids: String...) -> [String] {
+        uids.map { rule($0).id }
+    }
+
+    private func rule(_ uid: String, transport: String = "Test", excluded: Bool = false) -> DeviceRule {
         DeviceRule(
             uid: uid,
             direction: .output,
             name: uid,
-            transportLabel: "Test",
-            isExcluded: false
+            transportLabel: transport,
+            isExcluded: excluded
         )
     }
 }

@@ -115,7 +115,32 @@ final class AppModel: ObservableObject {
     func setExcluded(_ excluded: Bool, ruleID: String) {
         updateRule(id: ruleID) { $0.isExcluded = excluded }
         guard let rule = allRules.first(where: { $0.id == ruleID }) else { return }
-        if excluded {
+        noteExclusionChange(of: rule)
+    }
+
+    /// Applies the allowed and Never use groups from preferences in one change.
+    func arrange(direction: DeviceDirection, allowed: [String], excluded: [String]) {
+        let currentRules = rules(for: direction)
+        let arrangedRules = RuleOrdering.arranged(currentRules, allowed: allowed, excluded: excluded)
+        guard arrangedRules != currentRules else { return }
+
+        if direction == .input {
+            policy.inputRules = arrangedRules
+        } else {
+            policy.outputRules = arrangedRules
+        }
+
+        let changedRules = arrangedRules.filter { rule in
+            currentRules.first { $0.id == rule.id }?.isExcluded != rule.isExcluded
+        }
+        if changedRules.isEmpty {
+            appendEvent("Changed \(direction.rawValue) priority", level: .info)
+        }
+        changedRules.forEach(noteExclusionChange)
+    }
+
+    private func noteExclusionChange(of rule: DeviceRule) {
+        if rule.isExcluded {
             if rule.direction == .input, manualInputOverrideUID == rule.uid {
                 manualInputOverrideUID = nil
             } else if rule.direction == .output, manualOutputOverrideUID == rule.uid {
@@ -123,57 +148,11 @@ final class AppModel: ObservableObject {
             }
         }
         appendEvent(
-            excluded ? "Excluded \(rule.name) as an \(rule.direction.rawValue)" : "Allowed \(rule.name) as an \(rule.direction.rawValue)",
-            level: excluded ? .warning : .info
+            rule.isExcluded
+                ? "Excluded \(rule.name) as an \(rule.direction.rawValue)"
+                : "Allowed \(rule.name) as an \(rule.direction.rawValue)",
+            level: rule.isExcluded ? .warning : .info
         )
-    }
-
-    func moveRule(direction: DeviceDirection, fromOffsets: IndexSet, toOffset: Int) {
-        if direction == .input {
-            policy.inputRules.move(fromOffsets: fromOffsets, toOffset: toOffset)
-        } else {
-            policy.outputRules.move(fromOffsets: fromOffsets, toOffset: toOffset)
-        }
-    }
-
-    func moveRule(direction: DeviceDirection, id: String, offset: Int) {
-        var rules = self.rules(for: direction)
-        guard let index = rules.firstIndex(where: { $0.id == id }) else { return }
-        let destination = min(max(index + offset, 0), rules.count - 1)
-        guard destination != index else { return }
-        rules.swapAt(index, destination)
-        if direction == .input {
-            policy.inputRules = rules
-        } else {
-            policy.outputRules = rules
-        }
-        appendEvent("Changed \(direction.rawValue) priority", level: .info)
-    }
-
-    func moveRule(direction: DeviceDirection, id: String, to edge: RuleOrderEdge) {
-        let currentRules = rules(for: direction)
-        let reorderedRules = RuleOrdering.moving(id, to: edge, in: currentRules)
-        guard reorderedRules != currentRules else { return }
-
-        if direction == .input {
-            policy.inputRules = reorderedRules
-        } else {
-            policy.outputRules = reorderedRules
-        }
-        appendEvent("Changed \(direction.rawValue) priority", level: .info)
-    }
-
-    func moveRule(direction: DeviceDirection, id: String, to index: Int) {
-        let currentRules = rules(for: direction)
-        let reorderedRules = RuleOrdering.moving(id, to: index, in: currentRules)
-        guard reorderedRules != currentRules else { return }
-
-        if direction == .input {
-            policy.inputRules = reorderedRules
-        } else {
-            policy.outputRules = reorderedRules
-        }
-        appendEvent("Changed \(direction.rawValue) priority", level: .info)
     }
 
     /// Connected devices are skipped: discovery would add them straight back.
