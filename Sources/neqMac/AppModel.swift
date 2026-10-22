@@ -176,6 +176,25 @@ final class AppModel: ObservableObject {
         appendEvent("Changed \(direction.rawValue) priority", level: .info)
     }
 
+    /// Connected devices are skipped: discovery would add them straight back.
+    func removeRules(direction: DeviceDirection, ids: Set<String>) {
+        let removable = rules(for: direction).filter { ids.contains($0.id) && device(for: $0) == nil }
+        guard !removable.isEmpty else { return }
+        let removedIDs = Set(removable.map(\.id))
+
+        if direction == .input {
+            policy.inputRules.removeAll { removedIDs.contains($0.id) }
+        } else {
+            policy.outputRules.removeAll { removedIDs.contains($0.id) }
+        }
+        appendEvent(
+            removable.count == 1
+                ? "Removed \(removable[0].name) from the \(direction.rawValue) list"
+                : "Removed \(removable.count) devices from the \(direction.rawValue) list",
+            level: .info
+        )
+    }
+
     func useNow(_ rule: DeviceRule) {
         guard let device = device(for: rule), !rule.isExcluded else { return }
         if rule.direction == .input {

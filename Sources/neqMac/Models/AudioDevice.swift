@@ -63,6 +63,18 @@ struct DeviceRule: Identifiable, Codable, Equatable, Sendable {
         return name
     }
 
+    /// Older builds saved "Audio device" when Core Audio reported no transport.
+    /// Most of those UIDs still say how the device is attached.
+    var displayTransport: String {
+        guard transportLabel == "Audio device" else { return transportLabel }
+        if uid.hasPrefix("AppleUSBAudioEngine:") { return "USB" }
+        if uid.hasPrefix("BuiltIn") { return "Built-in" }
+        if uid.range(of: #"^(?:[0-9A-Fa-f]{2}-){5}[0-9A-Fa-f]{2}:(?:input|output)$"#, options: .regularExpression) != nil {
+            return "Bluetooth"
+        }
+        return transportLabel
+    }
+
     func matches(_ device: AudioDevice) -> Bool {
         guard direction == device.direction else { return false }
         if uid == device.uid { return true }

@@ -244,6 +244,8 @@ private struct DeviceRulesSection: View {
         rules.firstIndex { model.isCurrent($0) }
     }
 
+    @State private var isEditing = false
+    @State private var selectedIDs: Set<String> = []
     @State private var draggingID: String?
     @State private var dragTranslation: CGFloat = 0
     @State private var rowFrames: [String: CGRect] = [:]
@@ -256,14 +258,27 @@ private struct DeviceRulesSection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 7) {
-                Image(systemName: direction.systemImage)
-                    .foregroundStyle(tint)
-                    .accessibilityHidden(true)
-                Text(direction.title)
+                HStack(spacing: 7) {
+                    Image(systemName: direction.systemImage)
+                        .foregroundStyle(tint)
+                        .accessibilityHidden(true)
+                    Text(direction.title)
+                }
+                .font(.headline)
+                .accessibilityElement(children: .combine)
+                .accessibilityAddTraits(.isHeader)
+
+                Spacer(minLength: 8)
+
+                if !rules.isEmpty {
+                    Button(isEditing ? "Done" : "Edit") {
+                        isEditing.toggle()
+                        selectedIDs = []
+                    }
+                    .controlSize(.small)
+                    .help(isEditing ? "Finish removing devices." : "Remove \(direction.rawValue) devices you no longer use.")
+                }
             }
-            .font(.headline)
-            .accessibilityElement(children: .combine)
-            .accessibilityAddTraits(.isHeader)
 
             VStack(spacing: 0) {
                 if rules.isEmpty {
@@ -293,6 +308,13 @@ private struct DeviceRulesSection: View {
                                 isLiveBelow: activeIndex.map { index < $0 } ?? false,
                                 isPinned: overrideUID == rule.uid,
                                 isDragging: isDragging,
+                                isEditing: isEditing,
+                                isSelected: Binding(
+                                    get: { selectedIDs.contains(rule.id) },
+                                    set: { selected in
+                                        if selected { selectedIDs.insert(rule.id) } else { selectedIDs.remove(rule.id) }
+                                    }
+                                ),
                                 tint: tint
                             )
                         }
@@ -307,11 +329,14 @@ private struct DeviceRulesSection: View {
                         .offset(y: offset(for: rule, at: index))
                         .animation(isDragging || reduceMotion ? nil : .snappy(duration: 0.15), value: dropIndex)
                         .zIndex(isDragging ? 1 : 0)
-                        .gesture(reorderGesture(for: rule))
+                        .gesture(reorderGesture(for: rule), including: isEditing ? .subviews : .all)
                     }
                 }
 
-                if !model.policy.automationEnabled, !rules.isEmpty {
+                if isEditing {
+                    Divider()
+                    editFooter
+                } else if !model.policy.automationEnabled, !rules.isEmpty {
                     Divider()
                     footerNote(
                         symbol: "pause.circle",
@@ -356,6 +381,38 @@ private struct DeviceRulesSection: View {
                     .strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.75)
             )
         }
+    }
+
+    // MARK: Removing devices
+
+    private var disconnectedIDs: Set<String> {
+        Set(rules.filter { model.device(for: $0) == nil }.map(\.id))
+    }
+
+    private var editFooter: some View {
+        let removable = selectedIDs.intersection(disconnectedIDs)
+
+        return HStack(spacing: 8) {
+            Text("Removed devices are added back if they reconnect.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 8)
+            Button("Select Disconnected") { selectedIDs = disconnectedIDs }
+                .controlSize(.small)
+                .disabled(disconnectedIDs.isEmpty || removable == disconnectedIDs)
+            Button(removable.isEmpty ? "Remove" : "Remove \(removable.count)", role: .destructive) {
+                withAnimation(reduceMotion ? nil : .snappy(duration: 0.2)) {
+                    model.removeRules(direction: direction, ids: removable)
+                }
+                selectedIDs = []
+                if model.rules(for: direction).isEmpty { isEditing = false }
+            }
+            .controlSize(.small)
+            .disabled(removable.isEmpty)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
     }
 
     // MARK: Drag to reorder
@@ -442,6 +499,8 @@ private struct DeviceRuleRow: View {
     let isLiveBelow: Bool
     let isPinned: Bool
     let isDragging: Bool
+    let isEditing: Bool
+    @Binding var isSelected: Bool
     let tint: Color
 
     private var state: RouteSlotState {
@@ -466,10 +525,9 @@ private struct DeviceRuleRow: View {
                     .layoutPriority(1)
 
                 HStack(spacing: 6) {
-                    Text(state.isCurrent ? rule.transportLabel : "\(rule.transportLabel) · \(state.title)")
+                    TransportText(transport: rule.displayTransport, detail: state.isCurrent ? nil : state.title)
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                        .lineLimit(1)
 
                     if state.isCurrent {
                         StatusBadge(text: "In use", systemImage: "checkmark", tint: tint, prominent: true)
@@ -485,31 +543,42 @@ private struct DeviceRuleRow: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .layoutPriority(1)
 
-            Toggle("Never use", isOn: Binding(
-                get: { rule.isExcluded },
-                set: { model.setExcluded($0, ruleID: rule.id) }
-            ))
-            .toggleStyle(.checkbox)
-            .fixedSize()
-            .help(neverUseHelp)
-            .accessibilityLabel("Never use \(rule.name)")
-            .accessibilityHint(neverUseHelp)
+            if isEditing {
+                Toggle("Remove \(rule.name)", isOn: $isSelected)
+                    .toggleStyle(.checkbox)
+                    .labelsHidden()
+                    .disabled(state.isConnected)
+                    .help(state.isConnected
+                          ? "\(rule.name) is connected, so it would be added straight back."
+                          : "Select \(rule.name) to remove it from the list.")
+                    .padding(.trailing, 6)
+            } else {
+                Toggle("Never use", isOn: Binding(
+                    get: { rule.isExcluded },
+                    set: { model.setExcluded($0, ruleID: rule.id) }
+                ))
+                .toggleStyle(.checkbox)
+                .fixedSize()
+                .help(neverUseHelp)
+                .accessibilityLabel("Never use \(rule.name)")
+                .accessibilityHint(neverUseHelp)
 
-            Button("Use now") {
-                model.useNow(rule)
+                Button("Use now") {
+                    model.useNow(rule)
+                }
+                .fixedSize()
+                .disabled(!state.isSelectable || state.isCurrent)
+                .help(useNowHelp)
+                .accessibilityLabel("Use \(rule.name) now")
+
+                Image(systemName: "line.3.horizontal")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(isDragging ? .secondary : .tertiary)
+                    .frame(width: 20, height: 28)
+                    .contentShape(Rectangle())
+                    .help("Drag to change the priority of \(rule.name).")
+                    .accessibilityHidden(true)
             }
-            .fixedSize()
-            .disabled(!state.isSelectable || state.isCurrent)
-            .help(useNowHelp)
-            .accessibilityLabel("Use \(rule.name) now")
-
-            Image(systemName: "line.3.horizontal")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(isDragging ? .secondary : .tertiary)
-                .frame(width: 20, height: 28)
-                .contentShape(Rectangle())
-                .help("Drag to change the priority of \(rule.name).")
-                .accessibilityHidden(true)
         }
         .padding(.trailing, 8)
         .background {
@@ -529,6 +598,11 @@ private struct DeviceRuleRow: View {
                 .disabled(isLast)
             Button("Move to Bottom") { model.moveRule(direction: rule.direction, id: rule.id, to: .last) }
                 .disabled(isLast)
+            Divider()
+            Button("Remove from List", role: .destructive) {
+                model.removeRules(direction: rule.direction, ids: [rule.id])
+            }
+            .disabled(state.isConnected)
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(rule.name), priority \(rank), \(state.title)\(isPinned ? ", pinned" : "")")

@@ -145,6 +145,37 @@ final class AirPlayDiscoveryTests: XCTestCase {
         try XCTSkipIf(checkedDevices == 0, "No audio devices with readable transport metadata are available")
     }
 
+    func testRemovingRulesSkipsConnectedDevices() {
+        let usb = device(1, uid: "usb", transport: kAudioDeviceTransportTypeUSB)
+        let store = MemoryPolicyStore(PersistedPolicy(outputRules: [
+            rule("usb", transport: "USB"),
+            rule("old-monitor", name: "Old Monitor", transport: "Audio device"),
+            rule("old-dac", name: "Old DAC", transport: "USB")
+        ]))
+        let model = AppModel(
+            audioClient: TestAudioClient(devices: [usb], outputID: usb.audioObjectID),
+            persistence: store
+        )
+
+        model.removeRules(direction: .output, ids: Set(model.policy.outputRules.map(\.id)))
+
+        XCTAssertEqual(model.policy.outputRules.map(\.uid), ["usb"])
+        XCTAssertEqual(store.savedPolicy, model.policy)
+    }
+
+    func testDisplayTransportRecoversGenericLabelsFromUID() {
+        let labels = [
+            "AppleUSBAudioEngine:Vendor:DAC:1100000:1",
+            "BuiltInHeadphoneOutputDevice",
+            "02-00-00-00-00-0A:output",
+            "02-00-00-00-00-0A:input",
+            "00000000-0000-0000-0000-000000000003"
+        ].map { rule($0, transport: "Audio device").displayTransport }
+
+        XCTAssertEqual(labels, ["USB", "Built-in", "Bluetooth", "Bluetooth", "Audio device"])
+        XCTAssertEqual(rule("AppleUSBAudioEngine:Vendor:DAC:1:1", transport: "HDMI").displayTransport, "HDMI")
+    }
+
     private func device(
         _ id: AudioObjectID,
         uid: String,

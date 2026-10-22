@@ -58,6 +58,8 @@ The headset may remain an allowed output while its input is excluded. “Never u
 ## Current behaviour
 
 - Independent persisted priority lists for inputs and outputs, reordered by dragging a row (or from its context menu)
+- Removal of disconnected devices from either list with **Edit**; a removed device is added back if it reconnects
+- A transport icon on each device; rules saved without transport metadata infer USB, Bluetooth or built-in from their UID
 - Persisted per-direction exclusions
 - Automatic fallback when devices appear or disappear
 - Manual overrides that end when the chosen device disconnects
