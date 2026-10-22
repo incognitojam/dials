@@ -43,7 +43,7 @@ enum RouteStyle {
     }
 
     static let cardCorner: CGFloat = 12
-    static let railWidth: CGFloat = 30
+    static let railWidth: CGFloat = 18
 }
 
 /// Every state a device can be in, resolved once so the wording stays identical

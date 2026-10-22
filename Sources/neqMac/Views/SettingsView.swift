@@ -637,28 +637,18 @@ private struct DeviceRuleRow: View {
     // MARK: The signal chain rail
 
     private var rail: some View {
-        HStack(spacing: 2) {
-            Text("\(rank)")
-                .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                .foregroundStyle(.tertiary)
-                .frame(width: 10, alignment: .trailing)
-                .accessibilityHidden(true)
+        // The chain is solid down to the device that actually won, then
+        // dashed: you can see exactly where the signal stopped.
+        VStack(spacing: 3) {
+            RailStroke(isLive: isLiveAbove, tint: tint)
+                .frame(maxHeight: .infinity)
+                .opacity(isFirst ? 0 : 1)
 
-            // The chain is solid down to the device that actually won, then
-            // dashed: you can see exactly where the signal stopped.
-            VStack(spacing: 3) {
-                RailStroke(isLive: isLiveAbove, tint: tint)
-                    .frame(maxHeight: .infinity)
-                    .opacity(isFirst ? 0 : 1)
+            StatePip(state: state, tint: tint)
 
-                StatePip(state: state, tint: tint)
-
-                RailStroke(isLive: isLiveBelow, tint: tint)
-                    .frame(maxHeight: .infinity)
-                    .opacity(isLast ? 0 : 1)
-            }
-            .frame(width: 18)
-            .frame(maxHeight: .infinity)
+            RailStroke(isLive: isLiveBelow, tint: tint)
+                .frame(maxHeight: .infinity)
+                .opacity(isLast ? 0 : 1)
         }
         .frame(width: RouteStyle.railWidth)
         .frame(maxHeight: .infinity)
