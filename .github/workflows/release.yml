@@ -59,46 +59,36 @@ jobs:
           npm run changeset -- publish-plan --output "$plan"
           echo "apps=$(node scripts/release-apps.mjs matrix "$plan")" >> "$GITHUB_OUTPUT"
 
-  test:
-    name: Test
+  release:
+    name: Release
     needs: prepare
     if: needs.prepare.outputs.mode == 'publish'
     runs-on: macos-26
-    permissions:
-      contents: read
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
       - name: Run tests
         run: swift test
-
-  release:
-    name: Release ${{ matrix.app }} v${{ matrix.version }}
-    needs: [prepare, test]
-    runs-on: macos-26
-    strategy:
-      fail-fast: false
-      matrix:
-        include: ${{ fromJSON(needs.prepare.outputs.apps) }}
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v7
-      - name: Build app
-        run: ./scripts/build-app.sh "${{ matrix.app }}"
-      - name: Verify signature
-        run: codesign --verify --strict "build/${{ matrix.app }}.app"
-      - name: Archive app
-        run: ditto -c -k --sequesterRsrc --keepParent "build/${{ matrix.app }}.app" "build/${{ matrix.app }}-${{ matrix.version }}.zip"
-      - name: Tag the tested commit and publish the GitHub release
+      - name: Build apps
+        env:
+          APPS: ${{ needs.prepare.outputs.apps }}
+        run: |
+          for app in $(jq -r '.[].app' <<< "$APPS"); do
+            ./scripts/build-app.sh "$app"
+            codesign --verify --strict "build/$app.app"
+            ditto -c -k --sequesterRsrc --keepParent "build/$app.app" "build/$app.zip"
+          done
+      - name: Tag the tested commit and publish the GitHub releases
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          APP: ${{ matrix.app }}
-          VERSION: ${{ matrix.version }}
-          TAG: ${{ matrix.tag }}
+          APPS: ${{ needs.prepare.outputs.apps }}
         run: |
-          notes="$RUNNER_TEMP/release-notes.md"
-          awk -v heading="## $VERSION" '$0 == heading { found = 1; next } found && /^## / { exit } found' "Resources/$APP/CHANGELOG.md" > "$notes"
-          grep -q . "$notes"
-          prerelease=()
-          if [[ "$VERSION" == *-* ]]; then prerelease=(--prerelease); fi
-          gh release create "$TAG" "build/$APP-$VERSION.zip" --target "$GITHUB_SHA" --title "$APP v$VERSION" --notes-file "$notes" "${prerelease[@]}"
+          while IFS=$'\t' read -r app version tag; do
+            notes="$RUNNER_TEMP/$app-release-notes.md"
+            awk -v heading="## $version" '$0 == heading { found = 1; next } found && /^## / { exit } found' "Resources/$app/CHANGELOG.md" > "$notes"
+            grep -q . "$notes"
+            mv "build/$app.zip" "build/$app-$version.zip"
+            prerelease=()
+            if [[ "$version" == *-* ]]; then prerelease=(--prerelease); fi
+            gh release create "$tag" "build/$app-$version.zip" --target "$GITHUB_SHA" --title "$app v$version" --notes-file "$notes" "${prerelease[@]}"
+          done < <(jq -r '.[] | [.app, .version, .tag] | @tsv' <<< "$APPS")
