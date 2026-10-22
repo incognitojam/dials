@@ -35,9 +35,9 @@ MACOS_DIR="$CONTENTS_DIR/MacOS"
 
 # macOS ties the Accessibility grant to the signing identity, and an ad-hoc
 # signature changes on every build, so the grant is dropped each time. Signing
-# with a stable self-signed certificate keeps it. See the README for how to make
-# one; without it this falls back to ad-hoc and any permission the app has been
-# granted has to be granted again after every build.
+# with a stable self-signed certificate keeps it. See docs/development.md for
+# how to make one; without it this falls back to ad-hoc and any permission the
+# app has been granted has to be granted again after every build.
 if [[ -z "${SIGN_IDENTITY:-}" ]]; then
     if security find-identity -v -p codesigning | grep -q "$APP Local"; then
         SIGN_IDENTITY="$APP Local"
