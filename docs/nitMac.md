@@ -33,7 +33,7 @@ Or install it to `~/Applications`:
 
 nitMac appears in the menu bar rather than the Dock. Brightness keys need Accessibility access; the slider in the menu-bar panel works without it.
 
-Signing, and why the Accessibility grant survives a rebuild, is covered in the [root README](../README.md).
+Signing, and why the Accessibility grant survives a rebuild, is covered in the [development instructions](development.md#signing). Polish still to do is listed in the [follow-ups](nitMac-follow-ups.md).
 
 ## How it reaches the monitor
 
