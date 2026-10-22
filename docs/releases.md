@@ -18,10 +18,12 @@ npm run changeset -- --empty
 
 Both commands create a small Markdown file under `.changeset/`. CI rejects pull requests without a new changeset and validates the changesets that are present.
 
-After changes reach `main`, the Release PR workflow creates or updates a `release: version apps` pull request. It collects pending non-empty changesets, applies the highest requested bump independently to each affected app, updates each app's `package.json` and `CHANGELOG.md`, synchronizes `CFBundleShortVersionString` in its `Info.plist`, and deletes the consumed changeset files.
+After changes reach `main`, the Release workflow creates or updates a single release pull request covering both apps, titled with each app's next version, such as `release: neqMac v0.2.0, nitMac v0.1.1`. It collects pending non-empty changesets, applies the highest requested bump independently to each affected app, updates each app's `package.json` and `CHANGELOG.md`, synchronizes `CFBundleShortVersionString` in its `Info.plist`, and deletes the consumed changeset files.
 
-Merging the Release PR records the app versions in the repository. It does not create Git tags, package the apps, publish GitHub releases, or force both apps to release together.
+GitHub holds CI on the release pull request because the workflow opened it, and `main` requires those checks to pass. Approve the pending workflow runs on the pull request before merging it.
+
+Merging the release pull request publishes each app whose version has no tag yet. The workflow runs the tests, then builds each app, tags the tested commit as `@dials/<app>@<version>`, and creates a GitHub release named `<App> v<version>` with that version's changelog section and the zipped app attached. Each app is tagged and released on its own, so an app without pending changes is left alone.
 
 The package versions in `Resources/neqMac/package.json` and `Resources/nitMac/package.json` are the sources of truth. Their `Info.plist` files are checked mirrors maintained by `npm run version:sync`; `npm run version:check` rejects drift.
 
-The Release PR workflow needs the repository setting **Actions → General → Allow GitHub Actions to create and approve pull requests** enabled.
+The Release workflow needs the repository setting **Actions → General → Allow GitHub Actions to create and approve pull requests** enabled.

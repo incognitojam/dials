@@ -1,0 +1,104 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Prepare
+    runs-on: ubuntu-latest
+    outputs:
+      mode: ${{ steps.mode.outputs.mode }}
+      apps: ${{ steps.plan.outputs.apps }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Select release mode
+        id: mode
+        uses: changesets/action/select-mode@v2.1.1
+      - name: Read the proposed versions
+        if: steps.mode.outputs.mode == 'version'
+        id: next
+        run: |
+          status="$RUNNER_TEMP/changeset-status.json"
+          npm run changeset -- status --output="$status"
+          echo "title=$(node scripts/release-apps.mjs title "$status")" >> "$GITHUB_OUTPUT"
+      - name: Create or update the release pull request
+        if: steps.mode.outputs.mode == 'version'
+        uses: changesets/action/version@v2.1.1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: npm run release:version
+          commit-message: "release: version apps"
+          pr-title: ${{ steps.next.outputs.title }}
+      - name: Read the apps to release
+        if: steps.mode.outputs.mode == 'publish'
+        id: plan
+        run: |
+          plan="$RUNNER_TEMP/changeset-publish-plan.json"
+          npm run changeset -- publish-plan --output "$plan"
+          echo "apps=$(node scripts/release-apps.mjs matrix "$plan")" >> "$GITHUB_OUTPUT"
+
+  test:
+    name: Test
+    needs: prepare
+    if: needs.prepare.outputs.mode == 'publish'
+    runs-on: macos-26
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+      - name: Run tests
+        run: swift test
+
+  release:
+    name: Release ${{ matrix.app }} v${{ matrix.version }}
+    needs: [prepare, test]
+    runs-on: macos-26
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.prepare.outputs.apps) }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+      - name: Build app
+        run: ./scripts/build-app.sh "${{ matrix.app }}"
+      - name: Verify signature
+        run: codesign --verify --strict "build/${{ matrix.app }}.app"
+      - name: Archive app
+        run: ditto -c -k --sequesterRsrc --keepParent "build/${{ matrix.app }}.app" "build/${{ matrix.app }}-${{ matrix.version }}.zip"
+      - name: Tag the tested commit and publish the GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APP: ${{ matrix.app }}
+          VERSION: ${{ matrix.version }}
+          TAG: ${{ matrix.tag }}
+        run: |
+          notes="$RUNNER_TEMP/release-notes.md"
+          awk -v heading="## $VERSION" '$0 == heading { found = 1; next } found && /^## / { exit } found' "Resources/$APP/CHANGELOG.md" > "$notes"
+          grep -q . "$notes"
+          prerelease=()
+          if [[ "$VERSION" == *-* ]]; then prerelease=(--prerelease); fi
+          gh release create "$TAG" "build/$APP-$VERSION.zip" --target "$GITHUB_SHA" --title "$APP v$VERSION" --notes-file "$notes" "${prerelease[@]}"
