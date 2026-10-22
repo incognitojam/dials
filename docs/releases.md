@@ -22,7 +22,7 @@ After changes reach `main`, the Release workflow creates or updates a single rel
 
 GitHub holds CI on the release pull request because the workflow opened it, and `main` requires those checks to pass. Approve the pending workflow runs on the pull request before merging it.
 
-Merging the release pull request publishes each app whose version has no tag yet. The workflow runs the tests, then builds each app, tags the tested commit as `@dials/<app>@<version>`, and creates a GitHub release named `<App> v<version>` with that version's changelog section and the zipped app attached. Each app is tagged and released on its own, so an app without pending changes is left alone.
+Merging the release pull request publishes each app whose version has no tag yet. Any push to `main` with no pending release notes does the same, so empty changesets left by internal pull requests never hold a release back. The workflow runs the tests, then builds each app, tags the tested commit as `@dials/<app>@<version>`, and creates a GitHub release named `<App> v<version>` with that version's changelog section and the zipped app attached. Each app is tagged and released on its own, so an app without pending changes is left alone.
 
 The package versions in `Resources/neqMac/package.json` and `Resources/nitMac/package.json` are the sources of truth. Their `Info.plist` files are checked mirrors maintained by `npm run version:sync`; `npm run version:check` rejects drift.
 

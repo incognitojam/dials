@@ -19,7 +19,6 @@ jobs:
     name: Prepare
     runs-on: ubuntu-latest
     outputs:
-      mode: ${{ steps.mode.outputs.mode }}
       apps: ${{ steps.plan.outputs.apps }}
     steps:
       - name: Check out repository
@@ -52,7 +51,7 @@ jobs:
           commit-message: "release: version apps"
           pr-title: ${{ steps.next.outputs.title }}
       - name: Read the apps to release
-        if: steps.mode.outputs.mode == 'publish'
+        if: steps.mode.outputs.mode != 'version'
         id: plan
         run: |
           plan="$RUNNER_TEMP/changeset-publish-plan.json"
@@ -62,7 +61,7 @@ jobs:
   release:
     name: Release
     needs: prepare
-    if: needs.prepare.outputs.mode == 'publish'
+    if: needs.prepare.outputs.apps != '' && needs.prepare.outputs.apps != '[]'
     runs-on: macos-26
     steps:
       - name: Check out repository
