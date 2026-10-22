@@ -244,6 +244,11 @@ private struct DeviceRulesSection: View {
         rules.firstIndex { model.isCurrent($0) }
     }
 
+    @State private var draggingID: String?
+    @State private var dragTranslation: CGFloat = 0
+    @State private var rowFrames: [String: CGRect] = [:]
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     private var allowedConnectedCount: Int {
         rules.filter { !$0.isExcluded && model.device(for: $0) != nil }.count
     }
@@ -270,20 +275,39 @@ private struct DeviceRulesSection: View {
                     .frame(height: 150)
                 } else {
                     ForEach(Array(rules.enumerated()), id: \.element.id) { index, rule in
-                        DeviceRuleRow(
-                            rule: rule,
-                            rank: index + 1,
-                            isFirst: index == 0,
-                            isLast: index == rules.count - 1,
-                            isLiveAbove: activeIndex.map { index <= $0 } ?? false,
-                            isLiveBelow: activeIndex.map { index < $0 } ?? false,
-                            isPinned: overrideUID == rule.uid,
-                            tint: tint
-                        )
+                        let isDragging = draggingID == rule.id
 
-                        if index < rules.count - 1 {
-                            Divider().padding(.leading, RouteStyle.railWidth + 24)
+                        VStack(spacing: 0) {
+                            if index > 0 {
+                                Divider()
+                                    .padding(.leading, RouteStyle.railWidth + 24)
+                                    .opacity(isDragging ? 0 : 1)
+                            }
+
+                            DeviceRuleRow(
+                                rule: rule,
+                                rank: index + 1,
+                                isFirst: index == 0,
+                                isLast: index == rules.count - 1,
+                                isLiveAbove: activeIndex.map { index <= $0 } ?? false,
+                                isLiveBelow: activeIndex.map { index < $0 } ?? false,
+                                isPinned: overrideUID == rule.uid,
+                                isDragging: isDragging,
+                                tint: tint
+                            )
                         }
+                        .background {
+                            GeometryReader { geometry in
+                                Color.clear.preference(
+                                    key: RowFramesKey.self,
+                                    value: [rule.id: geometry.frame(in: .named(coordinateSpace))]
+                                )
+                            }
+                        }
+                        .offset(y: offset(for: rule, at: index))
+                        .animation(isDragging || reduceMotion ? nil : .snappy(duration: 0.15), value: dropIndex)
+                        .zIndex(isDragging ? 1 : 0)
+                        .gesture(reorderGesture(for: rule))
                     }
                 }
 
@@ -319,6 +343,10 @@ private struct DeviceRulesSection: View {
                     )
                 }
             }
+            .coordinateSpace(name: coordinateSpace)
+            .onPreferenceChange(RowFramesKey.self) { frames in
+                if draggingID == nil { rowFrames = frames }
+            }
             .background(
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .fill(Color.primary.opacity(0.04))
@@ -328,6 +356,63 @@ private struct DeviceRulesSection: View {
                     .strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.75)
             )
         }
+    }
+
+    // MARK: Drag to reorder
+
+    private var coordinateSpace: String { "rules-\(direction.rawValue)" }
+
+    private var draggedFrame: CGRect? { draggingID.flatMap { rowFrames[$0] } }
+
+    private var sourceIndex: Int? { rules.firstIndex { $0.id == draggingID } }
+
+    private var clampedTranslation: CGFloat {
+        guard let draggedFrame,
+              let top = rules.first.flatMap({ rowFrames[$0.id] }),
+              let bottom = rules.last.flatMap({ rowFrames[$0.id] }) else { return 0 }
+        return min(max(dragTranslation, top.minY - draggedFrame.minY), bottom.maxY - draggedFrame.maxY)
+    }
+
+    /// Rows above the source stay above until the dragged row's top edge
+    /// passes their middle; rows below move up once its bottom edge does.
+    private var dropIndex: Int? {
+        guard let draggedFrame, let sourceIndex else { return nil }
+        let top = draggedFrame.minY + clampedTranslation
+        let bottom = draggedFrame.maxY + clampedTranslation
+        return rules.enumerated().filter { index, rule in
+            guard index != sourceIndex, let frame = rowFrames[rule.id] else { return false }
+            return frame.midY < (index < sourceIndex ? top : bottom)
+        }.count
+    }
+
+    private func offset(for rule: DeviceRule, at index: Int) -> CGFloat {
+        guard let draggedFrame, let sourceIndex, let dropIndex else { return 0 }
+        if rule.id == draggingID { return clampedTranslation }
+        if sourceIndex < dropIndex, (sourceIndex + 1...dropIndex).contains(index) { return -draggedFrame.height }
+        if dropIndex < sourceIndex, (dropIndex..<sourceIndex).contains(index) { return draggedFrame.height }
+        return 0
+    }
+
+    private func reorderGesture(for rule: DeviceRule) -> some Gesture {
+        DragGesture(minimumDistance: 4, coordinateSpace: .named(coordinateSpace))
+            .onChanged { value in
+                if draggingID == nil { draggingID = rule.id }
+                guard draggingID == rule.id else { return }
+                NSCursor.closedHand.set()
+                dragTranslation = value.translation.height
+            }
+            .onEnded { _ in
+                guard draggingID == rule.id else { return }
+                NSCursor.arrow.set()
+                let target = dropIndex
+                withAnimation(reduceMotion ? nil : .snappy(duration: 0.18)) {
+                    if let target {
+                        model.moveRule(direction: direction, id: rule.id, to: target)
+                    }
+                    draggingID = nil
+                    dragTranslation = 0
+                }
+            }
     }
 
     private func footerNote(symbol: String, text: String) -> some View {
@@ -356,6 +441,7 @@ private struct DeviceRuleRow: View {
     let isLiveAbove: Bool
     let isLiveBelow: Bool
     let isPinned: Bool
+    let isDragging: Bool
     let tint: Color
 
     private var state: RouteSlotState {
@@ -399,42 +485,6 @@ private struct DeviceRuleRow: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .layoutPriority(1)
 
-            HStack(spacing: 2) {
-                Button {
-                    if NSEvent.modifierFlags.contains(.command) {
-                        model.moveRule(direction: rule.direction, id: rule.id, to: .first)
-                    } else {
-                        model.moveRule(direction: rule.direction, id: rule.id, offset: -1)
-                    }
-                } label: {
-                    Image(systemName: "chevron.up")
-                        .frame(width: 22, height: 20)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.borderless)
-                .disabled(isFirst)
-                .help("Move \(rule.name) up one place. Command-click to move it to the top.")
-                .accessibilityLabel("Increase priority of \(rule.name)")
-                .accessibilityHint("Command-click to move to the top")
-
-                Button {
-                    if NSEvent.modifierFlags.contains(.command) {
-                        model.moveRule(direction: rule.direction, id: rule.id, to: .last)
-                    } else {
-                        model.moveRule(direction: rule.direction, id: rule.id, offset: 1)
-                    }
-                } label: {
-                    Image(systemName: "chevron.down")
-                        .frame(width: 22, height: 20)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.borderless)
-                .disabled(isLast)
-                .help("Move \(rule.name) down one place. Command-click to move it to the bottom.")
-                .accessibilityLabel("Decrease priority of \(rule.name)")
-                .accessibilityHint("Command-click to move to the bottom")
-            }
-
             Toggle("Never use", isOn: Binding(
                 get: { rule.isExcluded },
                 set: { model.setExcluded($0, ruleID: rule.id) }
@@ -452,10 +502,48 @@ private struct DeviceRuleRow: View {
             .disabled(!state.isSelectable || state.isCurrent)
             .help(useNowHelp)
             .accessibilityLabel("Use \(rule.name) now")
+
+            Image(systemName: "line.3.horizontal")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(isDragging ? .secondary : .tertiary)
+                .frame(width: 20, height: 28)
+                .contentShape(Rectangle())
+                .help("Drag to change the priority of \(rule.name).")
+                .accessibilityHidden(true)
         }
-        .padding(.trailing, 12)
+        .padding(.trailing, 8)
+        .background {
+            if isDragging {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Color(nsColor: .windowBackgroundColor))
+                    .shadow(color: .black.opacity(0.16), radius: 4, y: 2)
+            }
+        }
+        .contentShape(Rectangle())
+        .contextMenu {
+            Button("Move to Top") { model.moveRule(direction: rule.direction, id: rule.id, to: .first) }
+                .disabled(isFirst)
+            Button("Move Up") { model.moveRule(direction: rule.direction, id: rule.id, offset: -1) }
+                .disabled(isFirst)
+            Button("Move Down") { model.moveRule(direction: rule.direction, id: rule.id, offset: 1) }
+                .disabled(isLast)
+            Button("Move to Bottom") { model.moveRule(direction: rule.direction, id: rule.id, to: .last) }
+                .disabled(isLast)
+        }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(rule.name), priority \(rank), \(state.title)\(isPinned ? ", pinned" : "")")
+        .accessibilityAction(named: "Increase priority") {
+            model.moveRule(direction: rule.direction, id: rule.id, offset: -1)
+        }
+        .accessibilityAction(named: "Decrease priority") {
+            model.moveRule(direction: rule.direction, id: rule.id, offset: 1)
+        }
+        .accessibilityAction(named: "Move to top") {
+            model.moveRule(direction: rule.direction, id: rule.id, to: .first)
+        }
+        .accessibilityAction(named: "Move to bottom") {
+            model.moveRule(direction: rule.direction, id: rule.id, to: .last)
+        }
     }
 
     private var useNowHelp: String {
@@ -502,6 +590,14 @@ private struct DeviceRuleRow: View {
         .frame(maxHeight: .infinity)
         .padding(.leading, 12)
         .help(state.title)
+    }
+}
+
+private struct RowFramesKey: PreferenceKey {
+    static let defaultValue: [String: CGRect] = [:]
+
+    static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) {
+        value.merge(nextValue()) { $1 }
     }
 }
 

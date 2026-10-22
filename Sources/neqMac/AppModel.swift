@@ -163,6 +163,19 @@ final class AppModel: ObservableObject {
         appendEvent("Changed \(direction.rawValue) priority", level: .info)
     }
 
+    func moveRule(direction: DeviceDirection, id: String, to index: Int) {
+        let currentRules = rules(for: direction)
+        let reorderedRules = RuleOrdering.moving(id, to: index, in: currentRules)
+        guard reorderedRules != currentRules else { return }
+
+        if direction == .input {
+            policy.inputRules = reorderedRules
+        } else {
+            policy.outputRules = reorderedRules
+        }
+        appendEvent("Changed \(direction.rawValue) priority", level: .info)
+    }
+
     func useNow(_ rule: DeviceRule) {
         guard let device = device(for: rule), !rule.isExcluded else { return }
         if rule.direction == .input {
