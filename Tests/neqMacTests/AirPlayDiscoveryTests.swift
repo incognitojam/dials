@@ -145,6 +145,86 @@ final class AirPlayDiscoveryTests: XCTestCase {
         try XCTSkipIf(checkedDevices == 0, "No audio devices with readable transport metadata are available")
     }
 
+    func testRemovingRulesSkipsConnectedDevices() {
+        let usb = device(1, uid: "usb", transport: kAudioDeviceTransportTypeUSB)
+        let store = MemoryPolicyStore(PersistedPolicy(outputRules: [
+            rule("usb", transport: "USB"),
+            rule("old-monitor", name: "Old Monitor", transport: "Audio device"),
+            rule("old-dac", name: "Old DAC", transport: "USB")
+        ]))
+        let model = AppModel(
+            audioClient: TestAudioClient(devices: [usb], outputID: usb.audioObjectID),
+            persistence: store
+        )
+
+        model.removeRules(direction: .output, ids: Set(model.policy.outputRules.map(\.id)))
+
+        XCTAssertEqual(model.policy.outputRules.map(\.uid), ["usb"])
+        XCTAssertEqual(store.savedPolicy, model.policy)
+    }
+
+    func testArrangingAPinnedDeviceIntoNeverUseClearsThePin() {
+        let speakers = device(1, uid: "speakers", name: "Speakers", transport: kAudioDeviceTransportTypeBuiltIn)
+        let dac = device(2, uid: "dac", name: "DAC", transport: kAudioDeviceTransportTypeUSB)
+        let store = MemoryPolicyStore(PersistedPolicy(outputRules: [
+            rule("speakers", name: "Speakers", transport: "Built-in"),
+            rule("dac", name: "DAC", transport: "USB")
+        ]))
+        let model = AppModel(
+            audioClient: TestAudioClient(devices: [speakers, dac], outputID: speakers.audioObjectID),
+            persistence: store
+        )
+        let ids = model.policy.outputRules.map(\.id)
+
+        model.useNow(model.policy.outputRules[1])
+        XCTAssertEqual(model.manualOutputOverrideUID, "dac")
+
+        model.arrange(direction: .output, allowed: [ids[0]], excluded: [ids[1]])
+
+        XCTAssertNil(model.manualOutputOverrideUID)
+        XCTAssertEqual(model.policy.outputRules.map(\.isExcluded), [false, true])
+        XCTAssertEqual(model.events.first?.message, "Excluded DAC as an output")
+        XCTAssertEqual(store.savedPolicy, model.policy)
+    }
+
+    func testSerialLessUSBDeviceKeepsOneRuleAcrossPorts() {
+        let dock = "AppleUSBAudioEngine:Vendor:Desk DAC:1100000:1"
+        let directPort = "AppleUSBAudioEngine:Vendor:Desk DAC:120000:1"
+        let serialA = "AppleUSBAudioEngine:Vendor:Adapter:SERIAL0A:1"
+        let serialB = "AppleUSBAudioEngine:Vendor:Adapter:SERIAL0B:1"
+        let livePort = device(1, uid: "AppleUSBAudioEngine:Vendor:Desk DAC:2200000:1", name: "Desk DAC", transport: kAudioDeviceTransportTypeUSB)
+        let store = MemoryPolicyStore(PersistedPolicy(outputRules: [
+            rule(dock, name: "Desk DAC", transport: "USB"),
+            rule(serialA, name: "Adapter", transport: "USB"),
+            rule(directPort, name: "Desk DAC", transport: "Audio device", excluded: true),
+            rule(serialB, name: "Adapter", transport: "USB")
+        ]))
+        let model = AppModel(
+            audioClient: TestAudioClient(devices: [livePort], outputID: livePort.audioObjectID),
+            persistence: store
+        )
+
+        XCTAssertEqual(model.policy.outputRules.map(\.uid), [dock, serialA, serialB])
+        XCTAssertTrue(model.policy.outputRules[0].isExcluded)
+        XCTAssertEqual(model.device(for: model.policy.outputRules[0]), livePort)
+        XCTAssertTrue(model.isCurrent(model.policy.outputRules[0]))
+        XCTAssertNil(DeviceRule.portlessUSBKey(for: "AppleUSBAudioEngine:Google:Adapter:SERIAL0C:2"))
+        XCTAssertNil(DeviceRule.portlessUSBKey(for: "BuiltInSpeakerDevice"))
+    }
+
+    func testDisplayTransportRecoversGenericLabelsFromUID() {
+        let labels = [
+            "AppleUSBAudioEngine:Vendor:DAC:1100000:1",
+            "BuiltInHeadphoneOutputDevice",
+            "02-00-00-00-00-0A:output",
+            "02-00-00-00-00-0A:input",
+            "00000000-0000-0000-0000-000000000003"
+        ].map { rule($0, transport: "Audio device").displayTransport }
+
+        XCTAssertEqual(labels, ["USB", "Built-in", "Bluetooth", "Bluetooth", "Audio device"])
+        XCTAssertEqual(rule("AppleUSBAudioEngine:Vendor:DAC:1:1", transport: "HDMI").displayTransport, "HDMI")
+    }
+
     private func device(
         _ id: AudioObjectID,
         uid: String,

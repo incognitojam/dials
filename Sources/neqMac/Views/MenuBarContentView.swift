@@ -29,8 +29,21 @@ enum RouteStyle {
         }
     }
 
+    static func transportSymbol(for transport: String) -> String {
+        switch transport {
+        case "Built-in": "laptopcomputer"
+        case "Bluetooth": "wave.3.right"
+        case "USB": "cable.connector"
+        case "HDMI", "DisplayPort": "display"
+        case "AirPlay": "airplayaudio"
+        case "Virtual": "waveform"
+        case "Aggregate": "square.stack.3d.up"
+        default: "hifispeaker"
+        }
+    }
+
     static let cardCorner: CGFloat = 12
-    static let railWidth: CGFloat = 30
+    static let railWidth: CGFloat = 18
 }
 
 /// Every state a device can be in, resolved once so the wording stays identical
@@ -173,6 +186,22 @@ struct RailPath: Shape {
         path.move(to: CGPoint(x: rect.midX, y: rect.minY))
         path.addLine(to: CGPoint(x: rect.midX, y: rect.maxY))
         return path
+    }
+}
+
+/// How a device is attached, as a glyph followed by the transport word.
+struct TransportText: View {
+    let transport: String
+    var detail: String?
+
+    var body: some View {
+        HStack(spacing: 3) {
+            Image(systemName: RouteStyle.transportSymbol(for: transport))
+                .imageScale(.small)
+                .accessibilityHidden(true)
+            Text(detail.map { "\(transport) · \($0)" } ?? transport)
+        }
+        .lineLimit(1)
     }
 }
 
@@ -502,7 +531,13 @@ private struct RouteCard: View {
                         .font(.system(size: 13, weight: .semibold))
                         .lineLimit(1)
                         .truncationMode(.middle)
-                    Text(currentDevice?.transportLabel ?? "Nothing available to route to")
+                    Group {
+                        if let currentDevice {
+                            TransportText(transport: currentDevice.transportLabel)
+                        } else {
+                            Text("Nothing available to route to")
+                        }
+                    }
                         .font(.system(size: 10))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)

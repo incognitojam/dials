@@ -115,7 +115,32 @@ final class AppModel: ObservableObject {
     func setExcluded(_ excluded: Bool, ruleID: String) {
         updateRule(id: ruleID) { $0.isExcluded = excluded }
         guard let rule = allRules.first(where: { $0.id == ruleID }) else { return }
-        if excluded {
+        noteExclusionChange(of: rule)
+    }
+
+    /// Applies the allowed and Never use groups from preferences in one change.
+    func arrange(direction: DeviceDirection, allowed: [String], excluded: [String]) {
+        let currentRules = rules(for: direction)
+        let arrangedRules = RuleOrdering.arranged(currentRules, allowed: allowed, excluded: excluded)
+        guard arrangedRules != currentRules else { return }
+
+        if direction == .input {
+            policy.inputRules = arrangedRules
+        } else {
+            policy.outputRules = arrangedRules
+        }
+
+        let changedRules = arrangedRules.filter { rule in
+            currentRules.first { $0.id == rule.id }?.isExcluded != rule.isExcluded
+        }
+        if changedRules.isEmpty {
+            appendEvent("Changed \(direction.rawValue) priority", level: .info)
+        }
+        changedRules.forEach(noteExclusionChange)
+    }
+
+    private func noteExclusionChange(of rule: DeviceRule) {
+        if rule.isExcluded {
             if rule.direction == .input, manualInputOverrideUID == rule.uid {
                 manualInputOverrideUID = nil
             } else if rule.direction == .output, manualOutputOverrideUID == rule.uid {
@@ -123,44 +148,30 @@ final class AppModel: ObservableObject {
             }
         }
         appendEvent(
-            excluded ? "Excluded \(rule.name) as an \(rule.direction.rawValue)" : "Allowed \(rule.name) as an \(rule.direction.rawValue)",
-            level: excluded ? .warning : .info
+            rule.isExcluded
+                ? "Excluded \(rule.name) as an \(rule.direction.rawValue)"
+                : "Allowed \(rule.name) as an \(rule.direction.rawValue)",
+            level: rule.isExcluded ? .warning : .info
         )
     }
 
-    func moveRule(direction: DeviceDirection, fromOffsets: IndexSet, toOffset: Int) {
-        if direction == .input {
-            policy.inputRules.move(fromOffsets: fromOffsets, toOffset: toOffset)
-        } else {
-            policy.outputRules.move(fromOffsets: fromOffsets, toOffset: toOffset)
-        }
-    }
-
-    func moveRule(direction: DeviceDirection, id: String, offset: Int) {
-        var rules = self.rules(for: direction)
-        guard let index = rules.firstIndex(where: { $0.id == id }) else { return }
-        let destination = min(max(index + offset, 0), rules.count - 1)
-        guard destination != index else { return }
-        rules.swapAt(index, destination)
-        if direction == .input {
-            policy.inputRules = rules
-        } else {
-            policy.outputRules = rules
-        }
-        appendEvent("Changed \(direction.rawValue) priority", level: .info)
-    }
-
-    func moveRule(direction: DeviceDirection, id: String, to edge: RuleOrderEdge) {
-        let currentRules = rules(for: direction)
-        let reorderedRules = RuleOrdering.moving(id, to: edge, in: currentRules)
-        guard reorderedRules != currentRules else { return }
+    /// Connected devices are skipped: discovery would add them straight back.
+    func removeRules(direction: DeviceDirection, ids: Set<String>) {
+        let removable = rules(for: direction).filter { ids.contains($0.id) && device(for: $0) == nil }
+        guard !removable.isEmpty else { return }
+        let removedIDs = Set(removable.map(\.id))
 
         if direction == .input {
-            policy.inputRules = reorderedRules
+            policy.inputRules.removeAll { removedIDs.contains($0.id) }
         } else {
-            policy.outputRules = reorderedRules
+            policy.outputRules.removeAll { removedIDs.contains($0.id) }
         }
-        appendEvent("Changed \(direction.rawValue) priority", level: .info)
+        appendEvent(
+            removable.count == 1
+                ? "Removed \(removable[0].name) from the \(direction.rawValue) list"
+                : "Removed \(removable.count) devices from the \(direction.rawValue) list",
+            level: .info
+        )
     }
 
     func useNow(_ rule: DeviceRule) {
@@ -232,13 +243,11 @@ final class AppModel: ObservableObject {
         var updatedPolicy = policy
         updatedPolicy.inputRules = merged(
             existing: updatedPolicy.inputRules,
-            discovered: devices.filter { $0.direction == .input },
-            currentID: defaultInputID
+            discovered: devices.filter { $0.direction == .input }
         )
         updatedPolicy.outputRules = merged(
             existing: updatedPolicy.outputRules,
-            discovered: devices.filter { $0.direction == .output },
-            currentID: defaultOutputID
+            discovered: devices.filter { $0.direction == .output }
         )
         if updatedPolicy != policy {
             policy = updatedPolicy
@@ -247,8 +256,7 @@ final class AppModel: ObservableObject {
 
     private func merged(
         existing: [DeviceRule],
-        discovered: [AudioDevice],
-        currentID: AudioObjectID
+        discovered: [AudioDevice]
     ) -> [DeviceRule] {
         let airPlayNames = Set(existing.compactMap(\.airPlayName)).union(
             discovered.filter {
@@ -282,22 +290,18 @@ final class AppModel: ObservableObject {
                     transportLabel: device.transportLabel,
                     isExcluded: false
                 )
-                if discovered.contains(where: { $0.audioObjectID == currentID && newRule.matches($0) }) {
-                    rules.insert(newRule, at: 0)
-                } else {
-                    rules.append(newRule)
-                }
+                rules.insert(newRule, at: RuleOrdering.insertionIndex(for: newRule, in: rules))
             }
         }
-        return Self.deduplicatedAirPlayRules(in: rules)
+        return Self.deduplicatedRules(in: rules)
     }
 
-    private static func deduplicatedAirPlayRules(in rules: [DeviceRule]) -> [DeviceRule] {
+    private static func deduplicatedRules(in rules: [DeviceRule]) -> [DeviceRule] {
         var uniqueRules: [DeviceRule] = []
         for rule in rules {
-            if let name = rule.airPlayName,
+            if let key = rule.mergeKey,
                let index = uniqueRules.firstIndex(where: {
-                   $0.direction == rule.direction && $0.airPlayName == name
+                   $0.direction == rule.direction && $0.mergeKey == key
                }) {
                 // Keep the highest priority and honor any saved "Never use" choice.
                 uniqueRules[index].isExcluded = uniqueRules[index].isExcluded || rule.isExcluded
@@ -352,8 +356,8 @@ final class AppModel: ObservableObject {
             where isLegacyAirPlayRule(repaired.outputRules[index]) {
             repaired.outputRules[index].transportLabel = "AirPlay"
         }
-        repaired.inputRules = deduplicatedAirPlayRules(in: repaired.inputRules)
-        repaired.outputRules = deduplicatedAirPlayRules(in: repaired.outputRules)
+        repaired.inputRules = deduplicatedRules(in: repaired.inputRules)
+        repaired.outputRules = deduplicatedRules(in: repaired.outputRules)
         return repaired
     }
 
