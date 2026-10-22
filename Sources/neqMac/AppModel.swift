@@ -321,15 +321,15 @@ final class AppModel: ObservableObject {
                 }
             }
         }
-        return Self.deduplicatedAirPlayRules(in: rules)
+        return Self.deduplicatedRules(in: rules)
     }
 
-    private static func deduplicatedAirPlayRules(in rules: [DeviceRule]) -> [DeviceRule] {
+    private static func deduplicatedRules(in rules: [DeviceRule]) -> [DeviceRule] {
         var uniqueRules: [DeviceRule] = []
         for rule in rules {
-            if let name = rule.airPlayName,
+            if let key = rule.mergeKey,
                let index = uniqueRules.firstIndex(where: {
-                   $0.direction == rule.direction && $0.airPlayName == name
+                   $0.direction == rule.direction && $0.mergeKey == key
                }) {
                 // Keep the highest priority and honor any saved "Never use" choice.
                 uniqueRules[index].isExcluded = uniqueRules[index].isExcluded || rule.isExcluded
@@ -384,8 +384,8 @@ final class AppModel: ObservableObject {
             where isLegacyAirPlayRule(repaired.outputRules[index]) {
             repaired.outputRules[index].transportLabel = "AirPlay"
         }
-        repaired.inputRules = deduplicatedAirPlayRules(in: repaired.inputRules)
-        repaired.outputRules = deduplicatedAirPlayRules(in: repaired.outputRules)
+        repaired.inputRules = deduplicatedRules(in: repaired.inputRules)
+        repaired.outputRules = deduplicatedRules(in: repaired.outputRules)
         return repaired
     }
 

@@ -163,6 +163,31 @@ final class AirPlayDiscoveryTests: XCTestCase {
         XCTAssertEqual(store.savedPolicy, model.policy)
     }
 
+    func testSerialLessUSBDeviceKeepsOneRuleAcrossPorts() {
+        let dock = "AppleUSBAudioEngine:Vendor:Desk DAC:1100000:1"
+        let directPort = "AppleUSBAudioEngine:Vendor:Desk DAC:120000:1"
+        let serialA = "AppleUSBAudioEngine:Vendor:Adapter:SERIAL0A:1"
+        let serialB = "AppleUSBAudioEngine:Vendor:Adapter:SERIAL0B:1"
+        let livePort = device(1, uid: "AppleUSBAudioEngine:Vendor:Desk DAC:2200000:1", name: "Desk DAC", transport: kAudioDeviceTransportTypeUSB)
+        let store = MemoryPolicyStore(PersistedPolicy(outputRules: [
+            rule(dock, name: "Desk DAC", transport: "USB"),
+            rule(serialA, name: "Adapter", transport: "USB"),
+            rule(directPort, name: "Desk DAC", transport: "Audio device", excluded: true),
+            rule(serialB, name: "Adapter", transport: "USB")
+        ]))
+        let model = AppModel(
+            audioClient: TestAudioClient(devices: [livePort], outputID: livePort.audioObjectID),
+            persistence: store
+        )
+
+        XCTAssertEqual(model.policy.outputRules.map(\.uid), [dock, serialA, serialB])
+        XCTAssertTrue(model.policy.outputRules[0].isExcluded)
+        XCTAssertEqual(model.device(for: model.policy.outputRules[0]), livePort)
+        XCTAssertTrue(model.isCurrent(model.policy.outputRules[0]))
+        XCTAssertNil(DeviceRule.portlessUSBKey(for: "AppleUSBAudioEngine:Google:Adapter:SERIAL0C:2"))
+        XCTAssertNil(DeviceRule.portlessUSBKey(for: "BuiltInSpeakerDevice"))
+    }
+
     func testDisplayTransportRecoversGenericLabelsFromUID() {
         let labels = [
             "AppleUSBAudioEngine:Vendor:DAC:1100000:1",
