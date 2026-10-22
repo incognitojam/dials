@@ -243,13 +243,11 @@ final class AppModel: ObservableObject {
         var updatedPolicy = policy
         updatedPolicy.inputRules = merged(
             existing: updatedPolicy.inputRules,
-            discovered: devices.filter { $0.direction == .input },
-            currentID: defaultInputID
+            discovered: devices.filter { $0.direction == .input }
         )
         updatedPolicy.outputRules = merged(
             existing: updatedPolicy.outputRules,
-            discovered: devices.filter { $0.direction == .output },
-            currentID: defaultOutputID
+            discovered: devices.filter { $0.direction == .output }
         )
         if updatedPolicy != policy {
             policy = updatedPolicy
@@ -258,8 +256,7 @@ final class AppModel: ObservableObject {
 
     private func merged(
         existing: [DeviceRule],
-        discovered: [AudioDevice],
-        currentID: AudioObjectID
+        discovered: [AudioDevice]
     ) -> [DeviceRule] {
         let airPlayNames = Set(existing.compactMap(\.airPlayName)).union(
             discovered.filter {
@@ -293,11 +290,7 @@ final class AppModel: ObservableObject {
                     transportLabel: device.transportLabel,
                     isExcluded: false
                 )
-                if discovered.contains(where: { $0.audioObjectID == currentID && newRule.matches($0) }) {
-                    rules.insert(newRule, at: 0)
-                } else {
-                    rules.append(newRule)
-                }
+                rules.insert(newRule, at: RuleOrdering.insertionIndex(for: newRule, in: rules))
             }
         }
         return Self.deduplicatedRules(in: rules)

@@ -20,4 +20,32 @@ enum RuleOrdering {
             + place(excluded, excluded: true)
             + rules.filter { !placedIDs.contains($0.id) }
     }
+
+    /// Connection types in the order a typical setup prefers them: devices you
+    /// connect on purpose first, the Mac's own hardware and virtual devices last.
+    static func transportRank(of transport: String) -> Int {
+        switch transport {
+        case "Bluetooth": 0
+        case "AirPlay": 1
+        case "USB": 2
+        case "HDMI", "DisplayPort": 3
+        case "Built-in": 4
+        case "Virtual", "Aggregate": 6
+        default: 5
+        }
+    }
+
+    /// Where a newly discovered device joins the list: after the last allowed
+    /// device of the same or a preferred connection type, so a new pair of
+    /// headphones lands with the other wireless devices rather than at the
+    /// bottom. Applied to every device on first launch, this sorts by type.
+    static func insertionIndex(for rule: DeviceRule, in rules: [DeviceRule]) -> Int {
+        let rank = transportRank(of: rule.displayTransport)
+        if let index = rules.lastIndex(where: {
+            !$0.isExcluded && transportRank(of: $0.displayTransport) <= rank
+        }) {
+            return index + 1
+        }
+        return rules.firstIndex { !$0.isExcluded } ?? rules.count
+    }
 }

@@ -62,6 +62,7 @@ The headset may remain an allowed output while its input is excluded. “Never u
 - A transport icon on each device; rules saved without transport metadata infer USB, Bluetooth or built-in from their UID
 - Persisted per-direction exclusions, shown as a **Never use** group below each priority list; drag a device across the divider, or use its context menu, to exclude or allow it
 - **Use Now** on hover, or double-click a row, to switch to a device and pin it
+- New devices join the list by connection type, after the last allowed device of the same or a preferred type: Bluetooth, AirPlay, USB, HDMI or DisplayPort, built-in, then virtual. On first launch this sorts every device by type; after that the order within and across types is yours
 - Automatic fallback when devices appear or disappear
 - Manual overrides that end when the chosen device disconnects
 - Optional routing of system alert sounds with the main output
