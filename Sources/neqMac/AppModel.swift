@@ -22,16 +22,19 @@ final class AppModel: ObservableObject {
 
     private let audioClient: AudioDeviceClient
     private let persistence: PolicyPersisting
-    private var reconciliationWorkItem: DispatchWorkItem?
+    private let scheduler: ReconciliationScheduling
+    private var pendingReconciliation: AnyCancellable?
     private var lastDeviceIDs = Set<String>()
     private var hasLoadedInitialState = false
 
     init(
         audioClient: AudioDeviceClient = CoreAudioClient(),
-        persistence: PolicyPersisting = UserDefaultsPolicyStore()
+        persistence: PolicyPersisting = UserDefaultsPolicyStore(),
+        scheduler: ReconciliationScheduling = MainQueueScheduler()
     ) {
         self.audioClient = audioClient
         self.persistence = persistence
+        self.scheduler = scheduler
         self.policy = persistence.load()
 
         audioClient.onHardwareChange = { [weak self] in
@@ -218,20 +221,16 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private func handleHardwareChange() {
+    func handleHardwareChange() {
         refreshHardwareState()
         scheduleReconciliation(reason: "Audio hardware changed")
     }
 
     private func scheduleReconciliation(reason: String, delay: TimeInterval = 0.65) {
-        reconciliationWorkItem?.cancel()
-        let item = DispatchWorkItem { [weak self] in
-            Task { @MainActor in
-                self?.reconcile(reason: reason)
-            }
+        pendingReconciliation?.cancel()
+        pendingReconciliation = scheduler.schedule(after: delay) { [weak self] in
+            self?.reconcile(reason: reason)
         }
-        reconciliationWorkItem = item
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: item)
     }
 
     private func reconcile(reason: String) {
