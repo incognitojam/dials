@@ -56,7 +56,7 @@ That makes the installed copy the one to switch on, not the one in `build/`. Swi
 
 ## Signing
 
-macOS ties permission grants to an app's signing identity, and an ad-hoc signature changes on every build, so a permission is dropped each time it is rebuilt. `build-app.sh` signs with a certificate named `<app> Local` when one exists and falls back to ad-hoc otherwise. To create one:
+macOS ties permission grants to an app's signing identity, and an ad-hoc signature changes on every build, so a permission is dropped each time it is rebuilt. `build-app.sh` signs with a certificate named `<app> Local` when one exists and falls back to ad-hoc otherwise. To create one for nitMac, and again with `neqMac` in place of `nitMac` for the other app:
 
 ```sh
 openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \

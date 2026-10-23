@@ -16,8 +16,8 @@ and a Samsung Galaxy Buds Live whose firmware version was not read.
 
 Headsets that have a companion app expose a vendor RFCOMM service alongside the standard
 Bluetooth profiles. macOS caches the SDP records at pairing time, and reading that cache
-needs no entitlement, raises no prompt, and does not contact the device — `tools/bt-probe`
-prints it.
+needs no entitlement, raises no prompt, and does not contact the device —
+[`tools/bt-probe`](../tools/bt-probe/README.md) prints it.
 
 The Sony unit advertises:
 

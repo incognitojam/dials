@@ -1,4 +1,3 @@
-import AppKit
 import Combine
 import CoreAudio
 import Foundation
@@ -11,7 +10,6 @@ final class AppModel: ObservableObject {
     @Published private(set) var systemOutputID: AudioObjectID = kAudioObjectUnknown
     @Published private(set) var events: [RoutingEvent] = []
     @Published private(set) var lastError: String?
-    @Published private(set) var isReconciling = false
 
     @Published var policy: PersistedPolicy {
         didSet {
@@ -53,10 +51,6 @@ final class AppModel: ObservableObject {
         if policy.automationEnabled {
             scheduleReconciliation(reason: "App launched", delay: 0.8)
         }
-    }
-
-    var inputDevices: [AudioDevice] {
-        devices.filter { $0.direction == .input }
     }
 
     var outputDevices: [AudioDevice] {
@@ -405,8 +399,6 @@ final class AppModel: ObservableObject {
 
     private func reconcile(reason: String) {
         guard policy.automationEnabled else { return }
-        isReconciling = true
-        defer { isReconciling = false }
         reconcile(direction: .output, reason: reason)
         reconcile(direction: .input, reason: reason)
     }

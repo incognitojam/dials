@@ -234,7 +234,6 @@ struct MenuBarContentView: View {
     @StateObject private var loginItem = LoginItem()
     @Environment(\.openWindow) private var openWindow
     @Environment(\.dismiss) private var dismiss
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -307,18 +306,9 @@ struct MenuBarContentView: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text("neqMac")
                     .font(.system(size: 15, weight: .semibold))
-                HStack(spacing: 5) {
-                    Text(statusText)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    if model.isReconciling, !reduceMotion {
-                        ProgressView()
-                            .controlSize(.small)
-                            .scaleEffect(0.6)
-                            .frame(width: 12, height: 12)
-                            .accessibilityHidden(true)
-                    }
-                }
+                Text(statusText)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Spacer(minLength: 8)
@@ -338,7 +328,6 @@ struct MenuBarContentView: View {
     }
 
     private var statusText: String {
-        if model.isReconciling { return "Applying your priority order…" }
         if !model.policy.automationEnabled { return "Automation paused" }
         if model.manualOutputOverrideUID != nil || model.manualInputOverrideUID != nil {
             return "Auto-routing · manual pin active"

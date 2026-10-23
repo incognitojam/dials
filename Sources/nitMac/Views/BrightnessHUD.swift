@@ -20,8 +20,7 @@ final class BrightnessHUD {
 
     private static let visibleDuration: Duration = .milliseconds(1200)
     private static let fadeDuration: TimeInterval = 0.35
-    private static let size = NSSize(width: 292, height: 64)
-    private static let cornerRadius: CGFloat = 22
+    static let size = NSSize(width: 292, height: 64)
     private static let menuBarGap: CGFloat = 6
     private static let screenEdgeInset: CGFloat = 10
 
@@ -55,8 +54,6 @@ final class BrightnessHUD {
         }
     }
 
-    /// Used when the menu bar panel opens: its slider takes over as the feedback,
-    /// and the indicator would otherwise sit on top of it at screen-saver level.
     /// Builds the panel ahead of the first key press. Creating a hosting view and
     /// its glass costs enough that doing it inside the event tap callback risks
     /// tripping the tap's timeout.
@@ -64,6 +61,8 @@ final class BrightnessHUD {
         if panel == nil { panel = makePanel() }
     }
 
+    /// Used when the menu bar panel opens: its slider takes over as the feedback,
+    /// and the indicator would otherwise sit on top of it at screen-saver level.
     func hide() {
         dismissTask?.cancel()
         dismissTask = nil
@@ -174,7 +173,7 @@ struct BrightnessHUDView: View {
         }
         .padding(.horizontal, Metrics.horizontalInset)
         .padding(.top, Metrics.topPadding)
-        .frame(width: 292, height: 64, alignment: .top)
+        .frame(width: BrightnessHUD.size.width, height: BrightnessHUD.size.height, alignment: .top)
         .hudGlass(cornerRadius: Metrics.cornerRadius)
         .overlay {
             // On macOS 27, let the material draw its edge and adapt it to the
@@ -212,7 +211,6 @@ private struct BrightnessTrack: View {
         }
     }
 }
-
 
 private extension View {
     /// Regular glass follows the system's appearance preference, including

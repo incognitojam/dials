@@ -2,7 +2,8 @@
 
 Read-only look at what paired Bluetooth devices advertise over SDP, used to work out
 whether a headset exposes a vendor control channel that neqMac could read its state from.
-See [Equalizer profiles](../../docs/eq-profiles.md) for why that matters.
+See [Reading headset state](../../docs/headset-control.md) for what it found, and
+[Equalizer profiles](../../docs/eq-profiles.md) for why that matters.
 
 ```sh
 swiftc -O -o build/probe probe.swift
