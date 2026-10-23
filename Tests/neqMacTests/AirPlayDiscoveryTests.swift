@@ -43,14 +43,14 @@ final class AirPlayDiscoveryTests: XCTestCase {
             XCTAssertEqual(model.policy.outputRules.map(\.uid), expectedUIDs)
             XCTAssertEqual(model.device(for: airPlayRule), replacement)
             XCTAssertTrue(model.isCurrent(airPlayRule))
-            XCTAssertEqual(model.manualOutputOverrideUID, "saved-receiver")
+            XCTAssertEqual(model.manualOverrideUID(for: .output), "saved-receiver")
             XCTAssertEqual(model.events, initialEvents)
         }
 
         client.availableDevices = [usb, microphone]
         client.outputID = usb.audioObjectID
         model.refreshHardwareState()
-        XCTAssertNil(model.manualOutputOverrideUID)
+        XCTAssertNil(model.manualOverrideUID(for: .output))
         XCTAssertNil(model.device(for: airPlayRule))
 
         let reconnected = device(7, uid: "reconnected")
@@ -165,11 +165,11 @@ final class AirPlayDiscoveryTests: XCTestCase {
         let ids = model.policy.outputRules.map(\.id)
 
         model.useNow(model.policy.outputRules[1])
-        XCTAssertEqual(model.manualOutputOverrideUID, "dac")
+        XCTAssertEqual(model.manualOverrideUID(for: .output), "dac")
 
         model.arrange(direction: .output, allowed: [ids[0]], excluded: [ids[1]])
 
-        XCTAssertNil(model.manualOutputOverrideUID)
+        XCTAssertNil(model.manualOverrideUID(for: .output))
         XCTAssertEqual(model.policy.outputRules.map(\.isExcluded), [false, true])
         XCTAssertEqual(model.events.first?.message, "Excluded DAC as an output")
         XCTAssertEqual(store.savedPolicy, model.policy)

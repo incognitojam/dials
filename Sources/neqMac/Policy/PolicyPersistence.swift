@@ -5,6 +5,19 @@ struct PersistedPolicy: Codable, Equatable {
     var includeSystemSounds = true
     var inputRules: [DeviceRule] = []
     var outputRules: [DeviceRule] = []
+
+    var allRules: [DeviceRule] { inputRules + outputRules }
+
+    subscript(rules direction: DeviceDirection) -> [DeviceRule] {
+        get { direction == .input ? inputRules : outputRules }
+        set {
+            if direction == .input {
+                inputRules = newValue
+            } else {
+                outputRules = newValue
+            }
+        }
+    }
 }
 
 protocol PolicyPersisting {

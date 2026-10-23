@@ -329,7 +329,7 @@ struct MenuBarContentView: View {
 
     private var statusText: String {
         if !model.policy.automationEnabled { return "Automation paused" }
-        if model.manualOutputOverrideUID != nil || model.manualInputOverrideUID != nil {
+        if !model.manualOverrideUIDs.isEmpty {
             return "Auto-routing · manual pin active"
         }
         return "Auto-routing your devices"
@@ -406,11 +406,11 @@ private struct RouteCard: View {
     private var rules: [DeviceRule] { model.rules(for: direction) }
 
     private var currentDevice: AudioDevice? {
-        direction == .output ? model.currentOutput : model.currentInput
+        model.currentDevice(for: direction)
     }
 
     private var overrideUID: String? {
-        direction == .output ? model.manualOutputOverrideUID : model.manualInputOverrideUID
+        model.manualOverrideUID(for: direction)
     }
 
     private var currentState: RouteSlotState {
