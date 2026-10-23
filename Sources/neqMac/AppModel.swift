@@ -33,12 +33,7 @@ final class AppModel: ObservableObject {
     ) {
         self.audioClient = audioClient
         self.persistence = persistence
-        let loadedPolicy = persistence.load()
-        let repairedPolicy = Self.repairSavedRules(in: loadedPolicy)
-        self.policy = repairedPolicy
-        if repairedPolicy != loadedPolicy {
-            persistence.save(repairedPolicy)
-        }
+        self.policy = persistence.load()
 
         audioClient.onHardwareChange = { [weak self] in
             Task { @MainActor in
@@ -252,24 +247,7 @@ final class AppModel: ObservableObject {
         existing: [DeviceRule],
         discovered: [AudioDevice]
     ) -> [DeviceRule] {
-        let airPlayNames = Set(existing.compactMap(\.airPlayName)).union(
-            discovered.filter {
-                $0.transportType == kAudioDeviceTransportTypeAirPlay
-                    && $0.name != AudioDevice.unknownName && !$0.name.isEmpty
-            }.map(\.name)
-        )
-        var rules = existing.map { rule in
-            guard rule.transportLabel == "Audio device", airPlayNames.contains(rule.name),
-                  !discovered.contains(where: {
-                      $0.uid == rule.uid && $0.transportType != kAudioDeviceTransportTypeUnknown
-                          && $0.transportType != kAudioDeviceTransportTypeAirPlay
-                  }) else { return rule }
-            // Transport metadata was missing in older builds. Recover aliases
-            // by the exact name of a known AirPlay receiver before merging.
-            var repaired = rule
-            repaired.transportLabel = "AirPlay"
-            return repaired
-        }
+        var rules = existing
         for device in discovered {
             if let index = rules.firstIndex(where: { $0.matches(device) }) {
                 if device.name != AudioDevice.unknownName {
@@ -321,49 +299,6 @@ final class AppModel: ObservableObject {
                 transportType: device.transportType
             )
         }
-    }
-
-    private static func repairSavedRules(in policy: PersistedPolicy) -> PersistedPolicy {
-        var repaired = policy
-        let knownRules = (policy.inputRules + policy.outputRules).filter {
-            $0.name != AudioDevice.unknownName
-        }
-
-        for index in repaired.inputRules.indices
-            where repaired.inputRules[index].name == AudioDevice.unknownName {
-            if let known = knownRule(for: repaired.inputRules[index].uid, in: knownRules) {
-                repaired.inputRules[index].name = known.name
-            }
-        }
-        for index in repaired.outputRules.indices
-            where repaired.outputRules[index].name == AudioDevice.unknownName {
-            if let known = knownRule(for: repaired.outputRules[index].uid, in: knownRules) {
-                repaired.outputRules[index].name = known.name
-            }
-        }
-        // Older builds lost transport metadata. Recover known AirPlay UID formats.
-        for index in repaired.inputRules.indices
-            where isLegacyAirPlayRule(repaired.inputRules[index]) {
-            repaired.inputRules[index].transportLabel = "AirPlay"
-        }
-        for index in repaired.outputRules.indices
-            where isLegacyAirPlayRule(repaired.outputRules[index]) {
-            repaired.outputRules[index].transportLabel = "AirPlay"
-        }
-        repaired.inputRules = deduplicatedRules(in: repaired.inputRules)
-        repaired.outputRules = deduplicatedRules(in: repaired.outputRules)
-        return repaired
-    }
-
-    private static func isLegacyAirPlayRule(_ rule: DeviceRule) -> Bool {
-        guard rule.transportLabel == "Audio device" else { return false }
-        let uid = rule.uid.lowercased()
-        let isMirroringSession = uid.range(
-            of: #"^(?:[0-9a-f]{2}:){5}[0-9a-f]{2}-.+-screen$"#,
-            options: .regularExpression
-        ) != nil
-        return uid.hasSuffix("-airplay") || isMirroringSession
-            || (rule.name == "AirPlay" && uid.hasSuffix("-audio"))
     }
 
     private static func knownRule(for uid: String, in rules: [DeviceRule]) -> DeviceRule? {
