@@ -14,6 +14,7 @@ The second is a Core Audio process tap, available since macOS 14.2. Everything b
 was measured on real hardware before any of it was built into the app: a USB DAC at
 48 kHz and a Bluetooth headset over A2DP at 44.1 kHz, with a wired microphone sitting
 inside the headphone cup so the acoustic path could be measured rather than assumed.
+The harness is in [`tools/tap-spike`](../tools/tap-spike/README.md).
 
 ## The shape that works
 
@@ -54,8 +55,9 @@ So an authorised tap that reads continuous digital silence has to be treated as 
 failure. Without that check the app has one way to mute the machine and no way to
 notice.
 
-The permission attaches to the signing identity, which is why `build-app.sh` signs with
-a stable certificate. An ad-hoc rebuild drops both grants.
+The permission attaches to the signing identity, so build with a stable `neqMac Local`
+certificate, as described in [Signing](development.md#signing). An ad-hoc rebuild drops
+both grants.
 
 ## It must be a signed bundle that is its own responsible process
 

@@ -1,6 +1,6 @@
 # nitMac follow-ups
 
-Polish noticed while using the installed app. None of these are bugs.
+Polish noticed while using the installed app. None of these are bugs. The last section records a decision rather than work to do.
 
 ## Bounce the glyph at the ends of the range
 
@@ -22,9 +22,9 @@ Writes are not the obvious suspect: `DisplayServicesSetBrightness` measures 0.02
 
 The panel shows the display name, a percentage and a slider. The percentage may be redundant against the slider position. Undecided — the system's own panel does not show one.
 
-## The indicator will not match the system brightness panel
+## Decided: the indicator will not match the system brightness panel
 
-These measurements describe Tahoe. Golden Gate changes Liquid Glass rendering and replaces the Clear/Tinted appearance choice with a slider; remeasure before using these values to tune the HUD on macOS 27. The HUD now leaves its glass edge to the system on macOS 27. See [compatibility notes](development.md#macos-27-golden-gate).
+These measurements describe Tahoe. Golden Gate changes Liquid Glass rendering and replaces the Clear/Tinted appearance choice with a slider; remeasure before using these values to tune the HUD on macOS 27. See [compatibility notes](development.md#macos-27-golden-gate).
 
 The system panel is more vivid than the indicator, which reads slightly milky beside it. Measured against a flat backdrop of `(60, 120, 40)`, its interior comes out `(31, 118, 5)`: brightness held, red and blue crushed. That is a saturation boost, which is how the pre-Tahoe vibrancy materials behave and is not something Liquid Glass does. `NSVisualEffectView` with `.hudWindow` has the same character but arrives darker, at `(39, 94, 13)`.
 

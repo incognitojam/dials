@@ -4,36 +4,17 @@ nitMac gives the physical brightness keys control over an external monitor. It d
 
 A nit is the unit of display luminance, which is the one thing this app touches.
 
-## Requirements
-
-- macOS 14 or later
-- Xcode 26 or later, including the macOS SDK and command-line tools
-- An external display macOS reports as adjustable
-
 ## Build and run
 
-Run the tests:
-
-```sh
-swift test
-```
-
-Build an ad-hoc signed menu-bar app:
-
-```sh
-./scripts/build-app.sh nitMac
-open build/nitMac.app
-```
-
-Or install it to `~/Applications`:
+nitMac needs an external display macOS reports as adjustable.
 
 ```sh
 ./scripts/build-app.sh --install nitMac
 ```
 
-nitMac appears in the menu bar rather than the Dock. Brightness keys need Accessibility access; the slider in the menu-bar panel works without it.
+nitMac appears in the menu bar rather than the Dock. Brightness keys need Accessibility access; the slider in the menu bar panel works without it.
 
-Signing, and why the Accessibility grant survives a rebuild, is covered in the [development instructions](development.md#signing). Polish still to do is listed in the [follow-ups](nitMac-follow-ups.md).
+Requirements, Start at login, and why the Accessibility grant survives a rebuild are covered in the [development instructions](development.md). Polish still to do is listed in the [follow-ups](nitMac-follow-ups.md).
 
 ## How it reaches the monitor
 

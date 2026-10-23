@@ -1,13 +1,13 @@
 import AppKit
 import CoreGraphics
 
-/// Intercepts the physical brightness keys so they drive DDC instead of macOS's
-/// own brightness control.
+/// Intercepts the physical brightness keys so they control external displays
+/// through DisplayServices.
 ///
 /// The keys arrive as `NX_SYSDEFINED` events rather than ordinary key presses, so
 /// this needs a session event tap and the Accessibility permission. A handled key
 /// is swallowed; otherwise the event is passed through untouched, which keeps the
-/// built-in display working normally when there is no DDC monitor to talk to.
+/// built-in display working normally when there is no external display to control.
 final class BrightnessKeyTap {
     typealias Handler = @MainActor (BrightnessDirection, NSEvent.ModifierFlags) -> Bool
 
