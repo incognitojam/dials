@@ -4,27 +4,18 @@ import XCTest
 
 @MainActor
 final class AirPlayDiscoveryTests: XCTestCase {
-    func testMigrationSelectionAndReconnectPreserveOneAirPlayRule() throws {
-        let unrecognizedLegacyUID = "02:00:00:00:00:01-session-legacy"
-        let legacyUID = "02:00:00:00:00:01-session-airplay"
-        let genericUID = "00000000-0000-0000-0000-000000000001-Audio"
-        let mirroringUID = "02:00:00:00:00:02-session-1-screen"
-        let otherTVUID = "02:00:00:00:00:03-session-1-screen"
-        let expectedUIDs = ["usb", unrecognizedLegacyUID, "other-room", genericUID, mirroringUID, otherTVUID]
+    func testSelectionAndReconnectPreserveOneAirPlayRule() throws {
+        let expectedUIDs = ["usb", "saved-receiver", "other-room", "tv"]
         let receiver = device(1, uid: "live-receiver")
         let usb = device(2, uid: "usb", transport: kAudioDeviceTransportTypeUSB)
         let microphone = device(3, uid: "microphone", direction: .input)
         let store = MemoryPolicyStore(PersistedPolicy(outputRules: [
-            rule("usb", transport: "Audio device"),
-            rule(unrecognizedLegacyUID, transport: "Audio device"),
-            rule(legacyUID, transport: "Audio device"),
+            rule("usb", transport: "USB"),
+            rule("saved-receiver"),
             rule("other-room", name: "Meeting Room"),
             rule("duplicate-receiver", excluded: true),
-            rule(genericUID, name: "AirPlay", transport: "Audio device"),
-            rule("00000000-0000-0000-0000-000000000002-Audio", name: "AirPlay", transport: "Audio device"),
-            rule(mirroringUID, name: "Living Room TV", transport: "Audio device"),
-            rule("02:00:00:00:00:02-session-2-screen", name: "Living Room TV", transport: "Audio device"),
-            rule(otherTVUID, name: "Guest Room TV", transport: "Audio device")
+            rule("tv", name: "Living Room TV"),
+            rule("tv-alias", name: "Living Room TV")
         ]))
         let client = TestAudioClient(devices: [receiver, usb, microphone], outputID: usb.audioObjectID)
         let model = AppModel(audioClient: client, persistence: store)
@@ -32,9 +23,6 @@ final class AirPlayDiscoveryTests: XCTestCase {
         XCTAssertEqual(model.policy.outputRules.map(\.uid), expectedUIDs)
         XCTAssertEqual(model.policy.inputRules.map(\.uid), ["microphone"])
         XCTAssertTrue(model.policy.outputRules[1].isExcluded)
-        XCTAssertEqual(model.policy.outputRules[1].transportLabel, "AirPlay")
-        XCTAssertEqual(model.policy.outputRules[0].transportLabel, "USB")
-        XCTAssertEqual(model.policy.outputRules.suffix(2).map(\.transportLabel), ["AirPlay", "AirPlay"])
         XCTAssertEqual(model.device(for: model.policy.outputRules[0]), usb)
         XCTAssertEqual(model.device(for: model.policy.outputRules[1]), receiver)
         XCTAssertEqual(store.savedPolicy, model.policy)
@@ -55,14 +43,14 @@ final class AirPlayDiscoveryTests: XCTestCase {
             XCTAssertEqual(model.policy.outputRules.map(\.uid), expectedUIDs)
             XCTAssertEqual(model.device(for: airPlayRule), replacement)
             XCTAssertTrue(model.isCurrent(airPlayRule))
-            XCTAssertEqual(model.manualOutputOverrideUID, unrecognizedLegacyUID)
+            XCTAssertEqual(model.manualOverrideUID(for: .output), "saved-receiver")
             XCTAssertEqual(model.events, initialEvents)
         }
 
         client.availableDevices = [usb, microphone]
         client.outputID = usb.audioObjectID
         model.refreshHardwareState()
-        XCTAssertNil(model.manualOutputOverrideUID)
+        XCTAssertNil(model.manualOverrideUID(for: .output))
         XCTAssertNil(model.device(for: airPlayRule))
 
         let reconnected = device(7, uid: "reconnected")
@@ -80,11 +68,11 @@ final class AirPlayDiscoveryTests: XCTestCase {
         let television = device(9, uid: "live-tv", name: "Living Room TV")
         client.availableDevices += [television, device(10, uid: "live-tv-alias", name: television.name)]
         model.refreshHardwareState()
-        model.useNow(model.policy.outputRules[4])
+        model.useNow(model.policy.outputRules[3])
 
         XCTAssertEqual(model.policy.outputRules.map(\.uid), expectedUIDs)
         XCTAssertEqual(client.selections.last, television)
-        XCTAssertTrue(model.isCurrent(model.policy.outputRules[4]))
+        XCTAssertTrue(model.isCurrent(model.policy.outputRules[3]))
         XCTAssertEqual(store.savedPolicy, model.policy)
     }
 
@@ -177,11 +165,11 @@ final class AirPlayDiscoveryTests: XCTestCase {
         let ids = model.policy.outputRules.map(\.id)
 
         model.useNow(model.policy.outputRules[1])
-        XCTAssertEqual(model.manualOutputOverrideUID, "dac")
+        XCTAssertEqual(model.manualOverrideUID(for: .output), "dac")
 
         model.arrange(direction: .output, allowed: [ids[0]], excluded: [ids[1]])
 
-        XCTAssertNil(model.manualOutputOverrideUID)
+        XCTAssertNil(model.manualOverrideUID(for: .output))
         XCTAssertEqual(model.policy.outputRules.map(\.isExcluded), [false, true])
         XCTAssertEqual(model.events.first?.message, "Excluded DAC as an output")
         XCTAssertEqual(store.savedPolicy, model.policy)

@@ -244,7 +244,7 @@ private struct DeviceRulesSection: View {
     private var tint: Color { RouteStyle.tint(for: direction) }
 
     private var overrideUID: String? {
-        direction == .output ? model.manualOutputOverrideUID : model.manualInputOverrideUID
+        model.manualOverrideUID(for: direction)
     }
 
     /// Index of the allowed row where the signal chain stops.
