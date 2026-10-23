@@ -46,8 +46,14 @@ if [[ -z "${SIGN_IDENTITY:-}" ]]; then
     fi
 fi
 
+# SwiftPM's swiftbuild backend records the deployment target as the SDK
+# version, and macOS gives apps built against an old SDK the old appearance.
+MIN_MACOS=$(/usr/libexec/PlistBuddy -c 'Print LSMinimumSystemVersion' "$INFO_PLIST")
+SDK_VERSION=$(xcrun --sdk macosx --show-sdk-version)
+
 cd "$PROJECT_DIR"
-swift build --configuration release --product "$APP"
+swift build --configuration release --product "$APP" \
+    -Xlinker -platform_version -Xlinker macos -Xlinker "$MIN_MACOS" -Xlinker "$SDK_VERSION"
 
 rm -rf "$APP_BUNDLE"
 mkdir -p "$MACOS_DIR"
