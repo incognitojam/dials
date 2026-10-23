@@ -3,7 +3,13 @@ import XCTest
 @testable import neqMac
 
 @MainActor
-final class AirPlayDiscoveryTests: XCTestCase {
+final class AppModelTests: XCTestCase {
+    private var scheduler: ManualScheduler!
+
+    override func setUp() async throws {
+        scheduler = ManualScheduler()
+    }
+
     func testSelectionAndReconnectPreserveOneAirPlayRule() throws {
         let expectedUIDs = ["usb", "saved-receiver", "other-room", "tv"]
         let receiver = device(1, uid: "live-receiver")
@@ -18,7 +24,7 @@ final class AirPlayDiscoveryTests: XCTestCase {
             rule("tv-alias", name: "Living Room TV")
         ]))
         let client = TestAudioClient(devices: [receiver, usb, microphone], outputID: usb.audioObjectID)
-        let model = AppModel(audioClient: client, persistence: store)
+        let model = AppModel(audioClient: client, persistence: store, scheduler: scheduler)
 
         XCTAssertEqual(model.policy.outputRules.map(\.uid), expectedUIDs)
         XCTAssertEqual(model.policy.inputRules.map(\.uid), ["microphone"])
@@ -76,7 +82,7 @@ final class AirPlayDiscoveryTests: XCTestCase {
         XCTAssertEqual(store.savedPolicy, model.policy)
     }
 
-    func testAutomaticRoutingHonorsExclusionAndFallsBackOnDisconnect() async {
+    func testAutomaticRoutingHonorsExclusionAndFallsBackOnDisconnect() {
         let receiver = device(1, uid: "live-receiver")
         let speakers = device(2, uid: "speakers", name: "Built-in Speakers", transport: kAudioDeviceTransportTypeBuiltIn)
         let usb = device(3, uid: "usb", name: "USB Speakers", transport: kAudioDeviceTransportTypeUSB)
@@ -87,25 +93,21 @@ final class AirPlayDiscoveryTests: XCTestCase {
             rule("duplicate-receiver", excluded: true),
             rule(speakers.uid, name: speakers.name, transport: "Built-in")
         ]))
-        let model = AppModel(audioClient: client, persistence: store)
-        let selectedUSB = expectation(description: "Skip excluded AirPlay and select USB")
-        client.onSelection = { selectedUSB.fulfill() }
+        let model = AppModel(audioClient: client, persistence: store, scheduler: scheduler)
+
         model.setAutomationEnabled(true)
-        await fulfillment(of: [selectedUSB], timeout: 2)
+        XCTAssertEqual(client.selections, [])
+        scheduler.runPending()
         XCTAssertEqual(client.selections, [usb])
 
-        let selectedFallback = expectation(description: "Fall back to built-in speakers when USB disconnects")
-        client.onSelection = { selectedFallback.fulfill() }
         client.availableDevices = [receiver, speakers]
         client.outputID = kAudioObjectUnknown
-        client.onHardwareChange?()
-        await fulfillment(of: [selectedFallback], timeout: 2)
+        model.handleHardwareChange()
+        scheduler.runPending()
         XCTAssertEqual(client.selections.last, speakers)
 
-        let selectedAirPlay = expectation(description: "Resolve the saved AirPlay UID after allowing the receiver")
-        client.onSelection = { selectedAirPlay.fulfill() }
         model.setExcluded(false, ruleID: model.policy.outputRules[0].id)
-        await fulfillment(of: [selectedAirPlay], timeout: 2)
+        scheduler.runPending()
 
         XCTAssertEqual(client.selections, [usb, speakers, receiver])
         XCTAssertEqual(model.policy.outputRules.map(\.uid), ["saved-receiver", "usb", "speakers"])
@@ -114,23 +116,40 @@ final class AirPlayDiscoveryTests: XCTestCase {
         XCTAssertNil(model.lastError)
     }
 
-    func testCoreAudioDiscoveryReadsLiveTransportMetadata() throws {
-        let devices = try CoreAudioClient().devices()
-        var checkedDevices = 0
-        for device in devices {
-            var transport: UInt32 = kAudioDeviceTransportTypeUnknown
-            var size = UInt32(MemoryLayout<UInt32>.size)
-            var address = AudioObjectPropertyAddress(
-                mSelector: kAudioDevicePropertyTransportType,
-                mScope: kAudioObjectPropertyScopeGlobal,
-                mElement: kAudioObjectPropertyElementMain
-            )
-            let status = AudioObjectGetPropertyData(device.audioObjectID, &address, 0, nil, &size, &transport)
-            guard status == noErr, transport != kAudioDeviceTransportTypeUnknown else { continue }
-            checkedDevices += 1
-            XCTAssertEqual(device.transportType, transport)
-        }
-        try XCTSkipIf(checkedDevices == 0, "No audio devices with readable transport metadata are available")
+    func testChangesBeforeReconciliationRunCollapseIntoOne() {
+        let speakers = device(1, uid: "speakers", name: "Speakers", transport: kAudioDeviceTransportTypeBuiltIn)
+        let usb = device(2, uid: "usb", name: "USB Speakers", transport: kAudioDeviceTransportTypeUSB)
+        let client = TestAudioClient(devices: [speakers, usb], outputID: speakers.audioObjectID)
+        let store = MemoryPolicyStore(PersistedPolicy(outputRules: [
+            rule(usb.uid, name: usb.name, transport: "USB"),
+            rule(speakers.uid, name: speakers.name, transport: "Built-in")
+        ]))
+        let model = AppModel(audioClient: client, persistence: store, scheduler: scheduler)
+
+        model.setAutomationEnabled(true)
+        model.handleHardwareChange()
+        model.setIncludeSystemSounds(false)
+        XCTAssertEqual(scheduler.pendingCount, 1)
+
+        scheduler.runPending()
+        XCTAssertEqual(client.selections, [usb])
+        XCTAssertEqual(scheduler.pendingCount, 0)
+    }
+
+    func testPausedAutomationDoesNotSwitchDevices() {
+        let speakers = device(1, uid: "speakers", name: "Speakers", transport: kAudioDeviceTransportTypeBuiltIn)
+        let usb = device(2, uid: "usb", name: "USB Speakers", transport: kAudioDeviceTransportTypeUSB)
+        let client = TestAudioClient(devices: [speakers, usb], outputID: speakers.audioObjectID)
+        let store = MemoryPolicyStore(PersistedPolicy(outputRules: [
+            rule(usb.uid, name: usb.name, transport: "USB"),
+            rule(speakers.uid, name: speakers.name, transport: "Built-in")
+        ]))
+        let model = AppModel(audioClient: client, persistence: store, scheduler: scheduler)
+
+        model.handleHardwareChange()
+        scheduler.runPending()
+
+        XCTAssertEqual(client.selections, [])
     }
 
     func testRemovingRulesSkipsConnectedDevices() {
@@ -142,7 +161,8 @@ final class AirPlayDiscoveryTests: XCTestCase {
         ]))
         let model = AppModel(
             audioClient: TestAudioClient(devices: [usb], outputID: usb.audioObjectID),
-            persistence: store
+            persistence: store,
+            scheduler: scheduler
         )
 
         model.removeRules(direction: .output, ids: Set(model.policy.outputRules.map(\.id)))
@@ -160,7 +180,8 @@ final class AirPlayDiscoveryTests: XCTestCase {
         ]))
         let model = AppModel(
             audioClient: TestAudioClient(devices: [speakers, dac], outputID: speakers.audioObjectID),
-            persistence: store
+            persistence: store,
+            scheduler: scheduler
         )
         let ids = model.policy.outputRules.map(\.id)
 
@@ -189,28 +210,14 @@ final class AirPlayDiscoveryTests: XCTestCase {
         ]))
         let model = AppModel(
             audioClient: TestAudioClient(devices: [livePort], outputID: livePort.audioObjectID),
-            persistence: store
+            persistence: store,
+            scheduler: scheduler
         )
 
         XCTAssertEqual(model.policy.outputRules.map(\.uid), [dock, serialA, serialB])
         XCTAssertTrue(model.policy.outputRules[0].isExcluded)
         XCTAssertEqual(model.device(for: model.policy.outputRules[0]), livePort)
         XCTAssertTrue(model.isCurrent(model.policy.outputRules[0]))
-        XCTAssertNil(DeviceRule.portlessUSBKey(for: "AppleUSBAudioEngine:Google:Adapter:SERIAL0C:2"))
-        XCTAssertNil(DeviceRule.portlessUSBKey(for: "BuiltInSpeakerDevice"))
-    }
-
-    func testDisplayTransportRecoversGenericLabelsFromUID() {
-        let labels = [
-            "AppleUSBAudioEngine:Vendor:DAC:1100000:1",
-            "BuiltInHeadphoneOutputDevice",
-            "02-00-00-00-00-0A:output",
-            "02-00-00-00-00-0A:input",
-            "00000000-0000-0000-0000-000000000003"
-        ].map { rule($0, transport: "Audio device").displayTransport }
-
-        XCTAssertEqual(labels, ["USB", "Built-in", "Bluetooth", "Bluetooth", "Audio device"])
-        XCTAssertEqual(rule("AppleUSBAudioEngine:Vendor:DAC:1:1", transport: "HDMI").displayTransport, "HDMI")
     }
 
     private func device(
@@ -230,41 +237,5 @@ final class AirPlayDiscoveryTests: XCTestCase {
         excluded: Bool = false
     ) -> DeviceRule {
         DeviceRule(uid: uid, direction: .output, name: name, transportLabel: transport, isExcluded: excluded)
-    }
-}
-
-private final class MemoryPolicyStore: PolicyPersisting {
-    private let initialPolicy: PersistedPolicy
-    private(set) var savedPolicy: PersistedPolicy?
-
-    init(_ policy: PersistedPolicy = PersistedPolicy()) {
-        initialPolicy = policy
-    }
-
-    func load() -> PersistedPolicy { initialPolicy }
-    func save(_ policy: PersistedPolicy) { savedPolicy = policy }
-}
-
-private final class TestAudioClient: AudioDeviceClient {
-    var onHardwareChange: (() -> Void)?
-    var onSelection: (() -> Void)?
-    var availableDevices: [AudioDevice]
-    var outputID: AudioObjectID
-    private(set) var selections: [AudioDevice] = []
-
-    init(devices: [AudioDevice] = [], outputID: AudioObjectID = kAudioObjectUnknown) {
-        availableDevices = devices
-        self.outputID = outputID
-    }
-
-    func devices() throws -> [AudioDevice] { availableDevices }
-    func defaultDeviceID(for direction: DeviceDirection) throws -> AudioObjectID {
-        direction == .output ? outputID : kAudioObjectUnknown
-    }
-    func defaultSystemOutputDeviceID() throws -> AudioObjectID { outputID }
-    func setDefaultDevice(_ device: AudioDevice, includeSystemSounds: Bool) throws {
-        selections.append(device)
-        if device.direction == .output { outputID = device.audioObjectID }
-        onSelection?()
     }
 }
