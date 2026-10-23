@@ -4,7 +4,6 @@ import SwiftUI
 
 struct MenuBarContentView: View {
     @EnvironmentObject private var model: AppModel
-    @StateObject private var loginItem = LoginItem()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -23,7 +22,7 @@ struct MenuBarContentView: View {
 
             Divider()
 
-            loginItemSection
+            LoginItemToggle()
 
             Divider()
 
@@ -37,12 +36,7 @@ struct MenuBarContentView: View {
         }
         .padding(16)
         .frame(width: 300)
-        .onAppear {
-            model.panelDidAppear()
-            // The item can be switched off in System Settings behind the app's
-            // back, so the real status is re-read every time the panel opens.
-            loginItem.refresh()
-        }
+        .onAppear { model.panelDidAppear() }
         .onDisappear { model.panelDidDisappear() }
     }
 
@@ -74,28 +68,6 @@ struct MenuBarContentView: View {
             }
             .font(.system(size: 15.5))
             .accessibilityLabel("\(display.name) brightness")
-        }
-    }
-
-    private var loginItemSection: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Toggle("Start at login", isOn: Binding(
-                get: { loginItem.isEnabled },
-                set: loginItem.setEnabled
-            ))
-            .font(.callout)
-            .toggleStyle(.switch)
-            .controlSize(.small)
-
-            if loginItem.needsApproval || loginItem.lastError != nil {
-                Text(loginItem.lastError ?? loginItem.explanation)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                Button("Open Login Items…") { loginItem.openLoginItemsSettings() }
-                    .buttonStyle(.link)
-                    .font(.caption)
-            }
         }
     }
 

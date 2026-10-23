@@ -19,11 +19,5 @@ struct NeqMacApp: App {
         }
         .defaultSize(width: 760, height: 680)
         .windowResizability(.contentMinSize)
-
-        Settings {
-            SettingsView()
-                .environmentObject(model)
-                .frame(minWidth: 720, minHeight: 620)
-        }
     }
 }
