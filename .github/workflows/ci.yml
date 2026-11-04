@@ -93,7 +93,7 @@ jobs:
             ditto -c -k --sequesterRsrc --keepParent "build/$app.app" "build/$app.zip"
           done
       - name: Upload apps
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: apps
           path: build/*.zip
