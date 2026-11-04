@@ -11,7 +11,7 @@
     "version:check": "node scripts/sync-app-versions.mjs --check"
   },
   "devDependencies": {
-    "@changesets/cli": "3.0.1"
+    "@changesets/cli": "3.0.3"
   },
   "engines": {
     "node": "^22.11 || ^24 || >=26",
