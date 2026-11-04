@@ -13,7 +13,7 @@ concurrency:
 jobs:
   changeset:
     name: Changeset
-    if: ${{ !startsWith(github.head_ref, 'changeset-release/') }}
+    if: ${{ !startsWith(github.head_ref, 'changeset-release/') && !startsWith(github.head_ref, 'renovate/') }}
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository

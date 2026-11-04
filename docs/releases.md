@@ -16,7 +16,7 @@ For internal work that should not appear in either changelog, run:
 npm run changeset -- --empty
 ```
 
-Both commands create a small Markdown file under `.changeset/`. CI rejects pull requests without a new changeset and validates the changesets that are present.
+Both commands create a small Markdown file under `.changeset/`. CI rejects pull requests without a new changeset and validates the changesets that are present. Renovate's dependency update pull requests, from `renovate/` branches, are the exception: Renovate can't run `npm run changeset`, so CI skips the changeset check for them and dependency updates don't appear in either changelog.
 
 After changes reach `main`, the Release workflow creates or updates a single release pull request covering both apps, titled with each app's next version, such as `release: neqMac v0.2.0, nitMac v0.1.1`. It collects pending non-empty changesets, applies the highest requested bump independently to each affected app, updates each app's `package.json` and `CHANGELOG.md`, synchronizes `CFBundleShortVersionString` in its `Info.plist`, and deletes the consumed changeset files.
 
