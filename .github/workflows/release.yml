@@ -35,7 +35,7 @@ jobs:
         run: npm ci
       - name: Select release mode
         id: mode
-        uses: changesets/action/select-mode@v2.1.1
+        uses: changesets/action/select-mode@v2.1.2
       - name: Read the proposed versions
         if: steps.mode.outputs.mode == 'version'
         id: next
@@ -45,7 +45,7 @@ jobs:
           echo "title=$(node scripts/release-apps.mjs title "$status")" >> "$GITHUB_OUTPUT"
       - name: Create or update the release pull request
         if: steps.mode.outputs.mode == 'version'
-        uses: changesets/action/version@v2.1.1
+        uses: changesets/action/version@v2.1.2
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: npm run release:version
