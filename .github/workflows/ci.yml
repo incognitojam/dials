@@ -57,23 +57,44 @@ jobs:
     name: Changes
     runs-on: ubuntu-latest
     outputs:
-      app: ${{ steps.app.outputs.changed }}
+      app: ${{ steps.paths.outputs.app }}
+      core: ${{ steps.paths.outputs.core }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - name: Detect app changes
-        id: app
+      - name: Detect app and core changes
+        id: paths
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          if git diff --name-only "$BASE_SHA...$HEAD_SHA" | grep -qE '^(Sources|Tests|Resources|scripts)/|^Package\.(swift|resolved)$|^\.github/workflows/ci\.yml$'; then
-            echo "changed=true" >> "$GITHUB_OUTPUT"
+          git diff --name-only "$BASE_SHA...$HEAD_SHA" > "$RUNNER_TEMP/changed-paths"
+          if grep -qE '^(Sources|Tests|Resources|scripts)/|^Package\.(swift|resolved)$|^\.github/workflows/ci\.yml$' "$RUNNER_TEMP/changed-paths"; then
+            echo "app=true" >> "$GITHUB_OUTPUT"
           else
-            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "app=false" >> "$GITHUB_OUTPUT"
           fi
+          if grep -qE '^Sources/[^/]*Core/|^Tests/[^/]*CoreTests/|^Package\.(swift|resolved)$|^\.github/workflows/ci\.yml$' "$RUNNER_TEMP/changed-paths"; then
+            echo "core=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "core=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Check workflows
+        uses: docker://rhysd/actionlint:1.7.12
+
+  linux:
+    name: Linux
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.core != 'false' }}
+    runs-on: ubuntu-latest
+    container: swift:6.0.3-noble
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+      - name: Run portable tests
+        run: swift test
 
   macos:
     name: macOS
