@@ -87,6 +87,14 @@ package struct BiquadSections: Sendable, BitwiseCopyable {
         }
     }
 
+    @_noLocks
+    func copy(to destination: UnsafeMutablePointer<BiquadCoefficients>) {
+        withUnsafeBytes(of: storage) { bytes in
+            UnsafeMutableRawPointer(destination).copyMemory(from: bytes.baseAddress!,
+                                                            byteCount: count * MemoryLayout<BiquadCoefficients>.stride)
+        }
+    }
+
     fileprivate mutating func append(_ section: BiquadCoefficients) {
         precondition(count < Self.capacity)
         withUnsafeMutablePointer(to: &storage) {
