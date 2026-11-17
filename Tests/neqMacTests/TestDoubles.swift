@@ -1,6 +1,7 @@
 import Combine
 import CoreAudio
 import Foundation
+@testable import RoutingCore
 @testable import neqMac
 
 final class MemoryPolicyStore: PolicyPersisting {

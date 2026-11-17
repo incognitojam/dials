@@ -1,6 +1,7 @@
 import Combine
 import CoreAudio
 import Foundation
+import RoutingCore
 
 @MainActor
 final class AppModel: ObservableObject {

@@ -1,7 +1,7 @@
 import Foundation
 
-enum RoutingDecisionEngine {
-    static func targetUID(
+package enum RoutingDecisionEngine {
+    package static func targetUID(
         rules: [DeviceRule],
         availableUIDs: Set<String>,
         manualOverrideUID: String?

@@ -1,5 +1,6 @@
 import CoreAudio
 import XCTest
+@testable import RoutingCore
 @testable import neqMac
 
 @MainActor

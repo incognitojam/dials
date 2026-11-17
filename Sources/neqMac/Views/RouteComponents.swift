@@ -1,3 +1,4 @@
+import RoutingCore
 import SwiftUI
 
 // neqMac draws routing as a "signal chain": an ordered rail that runs down a

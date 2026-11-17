@@ -1,9 +1,8 @@
-import CoreAudio
 import XCTest
-@testable import neqMac
+@testable import RoutingCore
 
 final class RuleMergingTests: XCTestCase {
-    private let unknown = AudioDevice.unknownName
+    private let unknown = unknownDeviceName
 
     func testMergeCollapsesDuplicatesAndKeepsAnyExclusion() {
         let existing = [
@@ -29,7 +28,7 @@ final class RuleMergingTests: XCTestCase {
 
     func testMergeUpdatesKnownRulesWithoutLosingTheirNames() {
         let existing = [rule("dac", name: "Desk DAC", transport: "Audio device")]
-        let discovered = [device("dac", name: unknown, transport: kAudioDeviceTransportTypeUSB)]
+        let discovered = [device("dac", name: unknown, transport: "USB")]
 
         let merged = RuleMerging.merged(existing: existing, discovered: discovered)
 
@@ -42,7 +41,7 @@ final class RuleMergingTests: XCTestCase {
             rule("headphones", transport: "Bluetooth"),
             rule("speakers", transport: "Built-in")
         ]
-        let discovered = [device("dac", transport: kAudioDeviceTransportTypeUSB)]
+        let discovered = [device("dac", transport: "USB")]
 
         let merged = RuleMerging.merged(existing: existing, discovered: discovered)
 
@@ -78,8 +77,15 @@ final class RuleMergingTests: XCTestCase {
         _ uid: String,
         name: String = "Test Device",
         direction: DeviceDirection = .output,
-        transport: UInt32 = kAudioDeviceTransportTypeUnknown
-    ) -> AudioDevice {
-        AudioDevice(audioObjectID: 1, uid: uid, name: name, direction: direction, transportType: transport)
+        transport: String = "Audio device"
+    ) -> Device {
+        Device(uid: uid, name: name, direction: direction, transportLabel: transport)
     }
+}
+
+private struct Device: RoutingDevice {
+    let uid: String
+    var name: String
+    let direction: DeviceDirection
+    let transportLabel: String
 }

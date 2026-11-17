@@ -42,7 +42,9 @@ Install one app:
 
 Both apps appear in the menu bar rather than the Dock.
 
-Shared code belongs in `Sources/DialsKit`; app-specific code stays in its own target.
+On Linux, `swift test` with Swift 6.0 or later builds and runs the routing policy and brightness-step suites. `RoutingCore` owns device rules, ordering, reconciliation decisions and policy persistence. `BrightnessCore` owns the percentage steps. The manifest adds the two apps, their Apple framework integrations, the shared login-item UI in `DialsKit` and the macOS integration suites when evaluated on a Mac. Both platforms compile the sources in Swift 5 language mode.
+
+Keep Apple framework imports out of `RoutingCore` and `BrightnessCore`. Shared code belongs in `Sources/DialsKit`; app-specific code stays in its own target.
 
 ## Releases
 
