@@ -62,7 +62,7 @@ jobs:
   release:
     name: Release
     needs: prepare
-    if: needs.prepare.outputs.mode == 'publish'
+    if: needs.prepare.outputs.mode == 'publish' && needs.prepare.outputs.apps != '[]'
     runs-on: macos-26
     steps:
       - name: Check out repository
