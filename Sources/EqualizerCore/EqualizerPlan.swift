@@ -108,9 +108,52 @@ package struct EqualizerPlan: Sendable, BitwiseCopyable {
     package enum Invalid: Error { case sampleRate, preamp, coefficients(band: Int), compareGain }
 
     package let sections: BiquadSections
-    package let preampGain: Double
+    package private(set) var headroomDB = 0.0
+    package private(set) var preampGain: Double
     package let sampleRate: Double
     package private(set) var compareGain: Double
+
+    /// Playback applies headroom to the compiled response, preserving the stored profile.
+    package static func playback(_ profile: ParametricEQ, sampleRate: Double) throws -> Self {
+        var plan = try Self(profile, sampleRate: sampleRate)
+        let upper = sampleRate / 2
+        let lower = min(20, upper)
+        var peak = -Double.infinity
+        func measure(_ hz: Double) throws -> Double {
+            let db = plan.magnitudeDB(at: hz)
+            guard db.isFinite || db == -.infinity else { throw Invalid.preamp }
+            peak = max(peak, db)
+            return db
+        }
+        if plan.sections.count == 0 {
+            peak = profile.gainDB
+        } else {
+            let bins = 4096
+            var frequencies = (0...bins).map { lower * pow(upper / lower, Double($0) / Double(bins)) }
+            frequencies[bins] = upper
+            for band in profile.bands {
+                let center = min(band.frequency, sampleRate * 0.49)
+                if center >= lower { frequencies.append(center) }
+                if (lower...upper).contains(band.frequency) { frequencies.append(band.frequency) }
+            }
+            frequencies.sort()
+            let response = try frequencies.map(measure)
+            for i in 1..<(response.count - 1) where response[i] >= response[i-1] && response[i] > response[i+1] {
+                var lo = frequencies[i-1], hi = frequencies[i+1]
+                for _ in 0..<24 {
+                    let third = (hi - lo) / 3
+                    if try measure(lo + third) < measure(hi - third) { lo += third } else { hi -= third }
+                }
+            }
+        }
+        if peak > 0 {
+            plan.headroomDB = peak
+            let scale = pow(10, -peak / 20)
+            plan.preampGain *= scale
+            plan.compareGain *= scale
+        }
+        return plan
+    }
 
     package static func thumbnail(_ profile: ParametricEQ, sampleRate: Double = 48_000) throws -> Self {
         try Self(profile, sampleRate: sampleRate)

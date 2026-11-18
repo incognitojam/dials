@@ -14,16 +14,21 @@ package struct EqualizerSettings: Codable, Equatable {
         assignments = try c.contains(.assignments) ? c.decode([Assignment].self, forKey: .assignments) : []
     }
 
+    package func allowsDuplex(_ device: any RoutingDevice) -> Bool {
+        assignments.first { $0.matches(device) }?.allowDuplexInput == true
+    }
+
     package struct Assignment: Codable, Equatable {
         let uid: String
         let name: String
         let transport: String
         let enabled: Bool
         enum Choice: String, Codable { case profile, none }
+        let allowDuplexInput: Bool
         let choice: Choice
         let profile: EQInfo?
 
-        enum CodingKeys: CodingKey { case uid, name, transport, enabled, choice, profile }
+        enum CodingKeys: CodingKey { case uid, name, transport, enabled, choice, profile, allowDuplexInput }
 
         package init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -34,6 +39,7 @@ package struct EqualizerSettings: Codable, Equatable {
             name = try c.contains(.name) ? c.decode(String.self, forKey: .name) : ""
             transport = try c.contains(.transport) ? c.decode(String.self, forKey: .transport) : ""
             enabled = try c.contains(.enabled) && c.decode(Bool.self, forKey: .enabled)
+            allowDuplexInput = try c.contains(.allowDuplexInput) && c.decode(Bool.self, forKey: .allowDuplexInput)
             choice = try c.decode(Choice.self, forKey: .choice)
             if choice == .none && c.contains(.profile) {
                 throw DecodingError.dataCorruptedError(forKey: .profile, in: c, debugDescription: "Unexpected profile for none")
@@ -52,13 +58,33 @@ package enum SettingsFile: Equatable {
 
     package init(at url: URL) {
         do {
-            self = .loaded(try JSONDecoder().decode(EqualizerSettings.self, from: Data(contentsOf: url)))
+            self.init(data: try Data(contentsOf: url))
         } catch CocoaError.fileReadNoSuchFile {
             self = .absent
         } catch {
-            self = .invalid(String(describing: error))
+            self = .invalid(error.localizedDescription)
         }
     }
+    package init(data: Data) {
+        do {
+            self = .loaded(try JSONDecoder().decode(EqualizerSettings.self, from: data))
+        } catch let error as DecodingError {
+            let path: [CodingKey]
+            let message: String
+            switch error {
+            case let .keyNotFound(key, context): path = context.codingPath + [key]; message = "missing field"
+            case let .typeMismatch(_, context): path = context.codingPath; message = "incorrect type"
+            case let .valueNotFound(_, context): path = context.codingPath; message = "missing value"
+            case let .dataCorrupted(context): path = context.codingPath; message = "invalid value or JSON"
+            @unknown default: path = []; message = "invalid settings"
+            }
+            let location = path.reduce("$") { result, key in
+                result + (key.intValue.map { "[\($0)]" } ?? "." + key.stringValue)
+            }
+            self = .invalid("\(location) · \(message)")
+        } catch { self = .invalid(error.localizedDescription) }
+    }
+
 }
 
 package enum DesiredEqualizer {
@@ -76,7 +102,7 @@ package enum DesiredEqualizer {
         guard eligible(device) else { return .suspended("Unsupported output transport") }
         guard let rate, rate.isFinite else { return .suspended("Output format unavailable") }
         guard rate >= 32_000 else { return .suspended("Output rate below 32 kHz") }
-        do { return .process(profile, try EqualizerPlan(profile.parameters, sampleRate: rate)) }
+        do { return .process(profile, try EqualizerPlan.playback(profile.parameters, sampleRate: rate)) }
         catch { return .suspended("Invalid equalizer plan: " + String(describing: error)) }
     }
 }

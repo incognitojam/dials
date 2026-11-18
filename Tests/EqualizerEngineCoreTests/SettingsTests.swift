@@ -48,3 +48,16 @@ final class SettingsTests: XCTestCase {
         }
     }
 }
+
+extension SettingsTests {
+    func testDuplexConsentAndInvalidCodingPath() throws {
+        let data = Data(("{\"assignments\":[" + assignment + "]}").utf8)
+        let settings = try JSONDecoder().decode(EqualizerSettings.self, from: data)
+        XCTAssertFalse(settings.allowsDuplex(Device()))
+        let opted = assignment.replacingOccurrences(of: "\"choice\"", with: "\"allowDuplexInput\":true,\"choice\"")
+        let allowed = try JSONDecoder().decode(EqualizerSettings.self, from: Data(("{\"assignments\":[" + opted + "]}").utf8))
+        XCTAssertTrue(allowed.allowsDuplex(Device()))
+        XCTAssertFalse(allowed.allowsDuplex(Device(uid: "another-output")))
+        XCTAssertEqual(SettingsFile(data: Data(#"{"assignments":[{"uid":9}]}"#.utf8)), .invalid("$.assignments[0].uid · incorrect type"))
+    }
+}
