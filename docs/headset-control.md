@@ -10,7 +10,8 @@ Asking the user is the fallback. This is the measurement of whether the headphon
 asked instead. They can: the state is readable, and changes are pushed rather than polled.
 
 Everything below was measured on macOS 26.6.1, against a Sony WH-1000XM4 on firmware 2.9.0
-and a Samsung Galaxy Buds Live whose firmware version was not read.
+and a Samsung Galaxy Buds Live whose firmware version was not read, except where
+[Firmware 3.0.1](#firmware-301) says otherwise.
 
 ## Finding the channel
 
@@ -109,6 +110,32 @@ headset being changed, rather than polling for it.
 Reading state on attach is still needed, because the first notification only says what
 changed since the app connected.
 
+## Firmware 3.0.1
+
+Sony's 3.0.1 update lists only "enhances system software security features", which on a
+control channel with no authentication of any kind is a plausible thing to lock down. So
+the reads were repeated with the same probe on a WH-1000XM4 that macOS reported as running
+3.0.1.
+
+The read path is unchanged. The probe found the cached Serial HPC service, opened it, and
+needed no extra handshake on the already-paired Mac. Init (`00 00`) was answered with
+`01 00 70 00`, and both state reads matched the 2.9.0 traces byte for byte:
+
+```
+-> 66 02
+<- 67 02 01 02 02 01 01 00   noise cancelling, dual mic
+-> 56 01
+<- 57 01 00 06 0A 0A 0A 0A 0A 0A   equalizer off, all six values centred
+```
+
+Change notifications are **not verified** on 3.0.1. The probe listened for 60 seconds and
+captured no `69 02`, but nobody pressed the earcup button during that time, so the silence
+says nothing either way. Until a run with the button cycled shows them arriving, the
+notification behaviour above belongs to 2.9.0 only.
+
+The headset stayed the default audio output before, during and after the run. Those are
+snapshots, so they cannot show whether playback stuttered while the channel was open.
+
 ## The Samsung protocol
 
 Frames are `0xFD`, a little-endian 16-bit header, a message id, the payload, a 16-bit
@@ -205,9 +232,8 @@ version information, voice-wake-up status, and frequent 32- to 104-byte debug fr
 containing ASCII diagnostics. All of it checksums correctly, none of it is understood, and
 none of it appears to be needed.
 
-Whether firmware 3.0.1 changes any of it. Its only published change is "enhances system
-software security features", which on a control channel with no authentication of any kind
-is a plausible thing to lock down. 2.9.0 is the baseline these traces belong to.
+Whether firmware 3.0.1 still pushes state changes. Its reads are unchanged, as
+[Firmware 3.0.1](#firmware-301) records, but no notification has yet been captured on it.
 
 ## One thing that wasted an hour
 

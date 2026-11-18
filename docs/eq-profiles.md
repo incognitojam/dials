@@ -7,7 +7,7 @@ work to adopt, and what shape to store it in.
 
 The answer is [OPRA](https://github.com/opra-project/OPRA) — Open Profiles for Revealing
 Audio — a community-maintained database seeded by Roon Labs. Its schema is adopted as
-neqMac's own profile format, so a profile fetched from OPRA, one bundled with the app and
+neqMac's own profile format, so a profile fetched from OPRA, one pasted from AutoEq and
 one edited by hand are all the same type.
 
 ## What the database contains
@@ -89,8 +89,26 @@ the coefficient maths has to stay stable at both ends of the audio band.
 `EqualizerCore` decodes an OPRA profile or imports an AutoEq paste. An unknown or
 malformed band rejects the profile. Missing band gain defaults to 0 dB. Low-pass and
 high-pass filters support Butterworth slopes from 6 to 36 dB/octave and default to 12.
-Text import accepts the centre-frequency shelves `LSC` and `HSC` with Q. It rejects
-the other shelf forms and ambiguous grouped numbers such as `1,000`. See the
+
+`AutoEq.parse` turns pasted text into a preamp and a list of bands, with no author or
+other credit; those come from wherever the text was found. Blank lines and a leading byte
+order mark are ignored, and every other line must be one of two kinds:
+
+- `Preamp: <gain> dB`, exactly once. The word `Preamp` is not case-sensitive; text
+  without a preamp line is rejected as a whole.
+- `Filter: …` or `Filter <n>: …`, where `n` is a positive whole number. A filter whose
+  next word is `OFF` is skipped, whatever follows. An `ON` filter must be one of:
+  - `PK`, `LSC` or `HSC`, written `Fc <f> Hz Gain <g> dB Q <q>` and nothing more, which
+    become `peak_dip`, `low_shelf` and `high_shelf`;
+  - `LP` or `HP`, written `Fc <f> Hz` and nothing more, which become a 12 dB/octave
+    `low_pass` or `high_pass`.
+
+Bands keep the order of the lines, not of their filter numbers. Any amount of whitespace
+separates fields. A decimal comma is accepted, but a comma followed by exactly three digits,
+such as `1,000`, is rejected as ambiguous. Every other filter form is rejected, including
+the shelves `LS` and `HS`, and so is a band the profile format would reject, such as a
+non-positive frequency or a Q below 0.1. A rejected line fails the whole import and reports
+its line number. See the
 [Equalizer APO filter reference](https://sourceforge.net/p/equalizerapo/wiki/Configuration%20reference/#filter).
 
 `EqualizerPlan(profile, sampleRate: rate)` designs Double-precision sections using
@@ -150,7 +168,8 @@ tuning corrects twice, and a profile has to record what the headset was set to. 
 has already solved it by making the setting part of the product. Noise cancelling switched
 on is a different product, not a modifier on one.
 
-So an assignment stored by neqMac points at an OPRA product id, not at a headphone name.
+So a profile neqMac takes from OPRA records the product id it came from, not a headphone
+name.
 
 Some headsets will say which variant they are. [Reading headset state](headset-control.md)
 measures a headset reporting its own noise cancelling mode, and pushing a notification when
@@ -173,14 +192,28 @@ Filter 2: ON PK Fc 6430 Hz Gain -4.2 dB Q 0.97
 ```
 
 `PK`, `LSC` and `HSC` map onto `peak_dip`, `low_shelf` and `high_shelf`, so importing a
-pasted block is a small parser over a format neqMac already stores. It is worth supporting
+pasted block is a small parser over a format neqMac already stores, described in
+[How curves are computed](#how-curves-are-computed). It is worth supporting
 as an import path and not worth adopting as the storage format.
 
-## Open questions
+## Fetched, not bundled
 
-Whether to bundle the 12 MB dump or fetch it. Bundling pins a known-good snapshot and works
-offline; fetching keeps the catalogue current and the binary small.
+None of this is built yet; it is milestone 4 in [Equalizer](equalizer.md#milestones).
 
-How a profile is chosen when a product has several. The DT 770 Pro carries sixteen, each
-from a different measurement of the same headphone, and nothing in the data says which is
-better — only who measured it.
+The dump will be fetched from the mirror the first time the catalogue is browsed, cached,
+and revalidated with a conditional request at most weekly. Bundling it was rejected: it is
+a large file to carry in the app and the repository, it would put CC BY-SA data inside an
+MIT repository, and a bundled snapshot goes stale between releases.
+
+Fetching gives up browsing before the first download, so nothing else will depend on the
+network. An assignment will not point into the catalogue: it stores a copy of its profile,
+credit included, and keeps working offline and after the catalogue changes or drops the
+entry. Only browsing will need the network, and a stale cache will still browse.
+
+## Nobody picks for the user
+
+When a product has several profiles, none is pre-selected. The DT 770 Pro carries sixteen,
+each from a different measurement of the same headphone, and nothing in the data says which
+is better — only who measured it. Ranking by author would present a preference as a fact.
+The picker will group profiles by author and measurement and overlay their curves, and the
+user chooses. How that and the rest of the equalizer fit together is in [Equalizer](equalizer.md).
