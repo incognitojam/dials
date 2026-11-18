@@ -5,7 +5,7 @@ import PackageDescription
 var targets: [Target] = [
     .target(name: "RoutingCore"),
     .target(name: "BrightnessCore"),
-    .target(name: "EqualizerCore"),
+    .target(name: "EqualizerCore", swiftSettings: [.unsafeFlags(["-O"], .when(configuration: .debug))]),
     .target(name: "EqualizerEngineCore", dependencies: ["EqualizerCore", "RoutingCore"]),
     .testTarget(name: "EqualizerEngineCoreTests", dependencies: ["EqualizerEngineCore"]),
     .testTarget(name: "EqualizerCoreTests", dependencies: ["EqualizerCore"]),
@@ -21,7 +21,8 @@ products += [
 ]
 targets += [
     .target(name: "DialsKit"),
-    .executableTarget(name: "neqMac", dependencies: ["DialsKit", "RoutingCore"]),
+    .target(name: "EqualizerIO"),
+    .executableTarget(name: "neqMac", dependencies: ["DialsKit", "RoutingCore", "EqualizerEngineCore", "EqualizerCore", "EqualizerIO"]),
     .executableTarget(name: "nitMac", dependencies: ["DialsKit", "BrightnessCore"]),
     .testTarget(name: "DialsKitTests", dependencies: ["DialsKit"]),
     .testTarget(name: "neqMacTests", dependencies: ["neqMac", "RoutingCore"])
