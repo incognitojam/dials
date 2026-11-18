@@ -15,6 +15,7 @@ USB devices moved between ports, and named AirPlay devices. Only USB outputs are
       "name": "Test DAC",
       "transport": "USB",
       "choice": "profile",
+      "allowDuplexInput": false,
       "enabled": true,
       "profile": {
         "type": "parametric_eq",
@@ -31,6 +32,13 @@ USB devices moved between ports, and named AirPlay devices. Only USB outputs are
   ]
 }
 ```
+
+USB outputs with input streams require `"allowDuplexInput": true` on their own assignment.
+It defaults to false. With the default, Activity shows the device stream and channel counts
+before suspending. Opting in permits a verification attempt. The tap stream must retain
+its identity when neqMac attaches the output, its format and channels must match, and
+the aggregate must accept the tap-only IO-proc input mask. Activity records the selected
+stream, buffer range and build timings. An unverifiable layout suspends processing.
 
 Both enabled switches default to false. The assignment list defaults to empty. Each
 assignment needs a nonempty UID and a choice. Name and transport default to empty strings.
@@ -49,11 +57,17 @@ and denied taps can both deliver silence, so Activity cannot establish permissio
 sample values.
 
 The session follows the settled default output, suspends below 32 kHz and compiles the
-profile at the tap's negotiated rate. It requests 128 frames on the aggregate. Profile
+profile at the tap's negotiated rate. It reads the current buffer size and leaves it to the device. Profile
 updates keep the running tap. Switching off releases it. A callback stall during active
 playback releases the tap before IO shutdown, which can take longer. After an observed
 failure, edit the file or change outputs to retry. After two failures on the same output,
 save an edit to retry it. Inspect **Activity** for the reason. The watchdog checks other
-processes and callback progress every 50 ms with a 350 ms gap tolerance. Device removal
-and a loss of all aggregate output channels both release the tap. A whole-process freeze
+processes and callback progress every 50 ms with a 350 ms gap tolerance. Device removal requires evidence from the physical device. A transient empty aggregate
+output list during a clock change can recover on a subsequent format notification. A whole-process freeze
 also freezes the watchdog; force-quit neqMac to release the mute in that case.
+
+
+Playback reserves headroom whenever the compiled preamp and filters together exceed
+0 dB. Activity gives the reduction in dB. The copied profile retains the entered gain.
+The same reduction applies to compare gain, and a final sample clamp bounds the
+rendered output to full scale. These limits do not establish a safe listening volume.

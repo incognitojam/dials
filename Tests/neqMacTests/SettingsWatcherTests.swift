@@ -12,7 +12,7 @@ final class SettingsWatcherTests: XCTestCase {
         let file = parent.appendingPathComponent("equalizer.json")
         let queue = DispatchQueue(label: "test.settings.watch")
         let changes = DispatchSemaphore(value: 0)
-        let watcher = SettingsWatcher(url: file, queue: queue) { _ in changes.signal() }
+        let watcher = SettingsWatcher(url: file, queue: queue) { changes.signal() }
         queue.sync { watcher.arm() }
         try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
         XCTAssertEqual(changes.wait(timeout: .now() + 3), .success)
@@ -29,6 +29,21 @@ final class SettingsWatcherTests: XCTestCase {
         try FileManager.default.removeItem(at: file)
         XCTAssertEqual(changes.wait(timeout: .now() + 3), .success)
         XCTAssertEqual(SettingsFile(at: file), .absent)
+        let moved = directory.appendingPathComponent("moved")
+        try FileManager.default.moveItem(at: parent, to: moved)
+        XCTAssertEqual(changes.wait(timeout: .now() + 3), .success)
+        try Data("{}".utf8).write(to: moved.appendingPathComponent("equalizer.json"))
+        XCTAssertEqual(changes.wait(timeout: .now() + 0.3), .timedOut)
+        try FileManager.default.moveItem(at: moved, to: parent)
+        XCTAssertEqual(changes.wait(timeout: .now() + 3), .success)
+        _ = SettingsFile(at: file)
+        XCTAssertEqual(changes.wait(timeout: .now() + 0.3), .timedOut)
+        try FileManager.default.removeItem(at: parent)
+        XCTAssertEqual(changes.wait(timeout: .now() + 3), .success)
+        try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
+        try Data("{}".utf8).write(to: file, options: .atomic)
+        XCTAssertEqual(changes.wait(timeout: .now() + 3), .success)
+        guard case .loaded = SettingsFile(at: file) else { return XCTFail() }
         withExtendedLifetime(watcher) {}
     }
 }
