@@ -42,6 +42,7 @@ final class CoreAudioTap: TapDevice {
     private let stillWanted: () -> Bool
     private let allowDuplexInput: Bool
     private var tapStream: AudioStreamID?
+    private var activeSubTap: AudioObjectID?
     private var attachedOutput = false
     private var layout: TapLayout?
     private var observingOverloads = false
@@ -102,9 +103,7 @@ final class CoreAudioTap: TapDevice {
         let inputWidths = try widths(output.audioObjectID, kAudioObjectPropertyScopeInput)
         let outputWidths = try widths(output.audioObjectID, kAudioObjectPropertyScopeOutput)
         diagnostic("USB input: \(inputs.count) streams, buffers \(inputWidths); output: \(outputs.count) streams, buffers \(outputWidths)")
-        if (!inputs.isEmpty || inputWidths.contains(where: { $0 > 0 })) && !allowDuplexInput {
-            throw SessionError.layout("USB output has input streams; allowDuplexInput is required for this assignment")
-        }
+        try TapLayout.requireConsent(inputStreams: inputs.count, bufferWidths: inputWidths, allowed: allowDuplexInput)
         var key = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyTranslatePIDToProcessObject,
             mScope: global, mElement: kAudioObjectPropertyElementMain)
         var pid = getpid()
@@ -149,8 +148,12 @@ final class CoreAudioTap: TapDevice {
             }
             guard initial.count == 1, try members(kAudioAggregateDevicePropertyFullSubDeviceList).isEmpty,
                   try members(kAudioAggregateDevicePropertyTapList) == [uuid.uuidString] else { throw SessionError.layout("Could not identify one input on the tap-only aggregate") }
+            let subtaps: [AudioObjectID] = try CoreAudioClient.readArray(objectID: aggregate,
+                selector: kAudioAggregateDevicePropertySubTapList, scope: global)
+            guard subtaps.count == 1 else { throw SessionError.layout("Tap-only aggregate has no unique active sub-tap") }
+            activeSubTap = subtaps[0]
             tapStream = initial[0]
-            diagnostic("Tap-only aggregate input stream ID \(initial[0])")
+            diagnostic("Tap-only aggregate input stream ID \(initial[0]), active sub-tap ID \(subtaps[0])")
             try CoreAudioClient.writeScalar([output.uid] as CFArray, objectID: aggregate,
                 selector: kAudioAggregateDevicePropertyFullSubDeviceList, scope: global)
             try CoreAudioClient.writeScalar(output.uid as CFString, objectID: aggregate,
@@ -214,7 +217,9 @@ final class CoreAudioTap: TapDevice {
         }
         let devices: [AudioObjectID] = try CoreAudioClient.readArray(objectID: aggregate,
             selector: kAudioAggregateDevicePropertyActiveSubDeviceList, scope: global)
-        guard devices.count == 1, try members(kAudioAggregateDevicePropertyFullSubDeviceList) == [output.uid],
+        let subtaps: [AudioObjectID] = try CoreAudioClient.readArray(objectID: aggregate,
+            selector: kAudioAggregateDevicePropertySubTapList, scope: global)
+        guard let activeSubTap, subtaps == [activeSubTap], devices.count == 1, try members(kAudioAggregateDevicePropertyFullSubDeviceList) == [output.uid],
               try members(kAudioAggregateDevicePropertyTapList) == [uuid.uuidString] else { throw SessionError.layout("Aggregate output is unverified") }
         let virtual: AudioStreamBasicDescription = try CoreAudioClient.readScalar(objectID: tapStream,
             selector: kAudioStreamPropertyVirtualFormat, scope: global)

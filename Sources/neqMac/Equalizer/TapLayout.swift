@@ -35,6 +35,12 @@ struct TapLayout {
                                 totalBuffers: UInt32(bufferWidths.count), channelsPerBuffer: width)
     }
 
+    static func requireConsent(inputStreams: Int, bufferWidths: [UInt32], allowed: Bool) throws {
+        if !allowed && (inputStreams > 0 || bufferWidths.contains(where: { $0 > 0 })) {
+            throw SessionError.layout("USB output has input streams; allowDuplexInput is required for this assignment")
+        }
+    }
+
     static func supported(_ format: AudioStreamBasicDescription) -> Bool {
         let width = format.mFormatFlags & kAudioFormatFlagIsNonInterleaved != 0 ? 1 : Int(format.mChannelsPerFrame)
         return format.mFormatID == kAudioFormatLinearPCM && format.mBitsPerChannel == 32 &&

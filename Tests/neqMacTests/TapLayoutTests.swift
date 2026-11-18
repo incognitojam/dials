@@ -1,6 +1,7 @@
 import CoreAudio
 import EqualizerCore
 import EqualizerIO
+import EqualizerEngineCore
 import XCTest
 @testable import neqMac
 
@@ -108,6 +109,31 @@ final class TapLayoutTests: XCTestCase {
             }
             XCTAssertEqual(samples[0].last, reverified ? 0.1 : 0)
         }
+    }
+
+    func testDuplexGateRequiresExplicitConsentBeforeCapture() {
+        XCTAssertNoThrow(try TapLayout.requireConsent(inputStreams: 0, bufferWidths: [], allowed: false))
+        XCTAssertThrowsError(try TapLayout.requireConsent(inputStreams: 1, bufferWidths: [], allowed: false))
+        XCTAssertThrowsError(try TapLayout.requireConsent(inputStreams: 0, bufferWidths: [2], allowed: false))
+        XCTAssertNoThrow(try TapLayout.requireConsent(inputStreams: 2, bufferWidths: [1, 1], allowed: true))
+    }
+
+    func testHandEditedBoostIsAttenuatedBeforeRendering() throws {
+        let json = #"{"enabled":true,"assignments":[{"uid":"test-dac","enabled":true,"choice":"profile","profile":{"author":"Example","type":"parametric_eq","parameters":{"gain_db":30,"bands":[{"type":"peak_dip","frequency":1000,"gain_db":20,"q":1}]}}}]}"#
+        let dac = AudioDevice(audioObjectID: 90, uid: "test-dac", name: "Test DAC", direction: .output, transportType: kAudioDeviceTransportTypeUSB)
+        let desired = DesiredEqualizer.resolve(.init(data: Data(json.utf8)), device: dac, rate: 48_000)
+        guard case let .process(_, plan) = desired else { return XCTFail("Expected a protected plan") }
+        XCTAssertEqual(plan.headroomDB, 50, accuracy: 1e-6)
+        XCTAssertEqual(plan.magnitudeDB(at: 1000), 0, accuracy: 1e-6)
+        let layout = EQInputLayout(firstBuffer: 0, bufferCount: 1, totalBuffers: 1, channelsPerBuffer: 2)
+        let p = UnsafeMutablePointer<RenderContext>.allocate(capacity: 1)
+        p.initialize(to: RenderContext(plan: plan, channels: 2, layout: layout))
+        defer { p.deinitialize(count: 1); p.deallocate() }
+        let src = Buffers([Buffer(2, 0.05, 2048)]), dest = Buffers([Buffer(2, 7, 2048)])
+        RenderContext.render(p, input: src.list.unsafePointer, output: dest.list.unsafeMutablePointer)
+        let samples = dest.values(0)
+        XCTAssertEqual(try XCTUnwrap(samples.last), 0.005, accuracy: 0.00001)
+        XCTAssertLessThan(samples.map(abs).max()!, 0.05)
     }
 
     func testRenderClampsBothPolaritiesEvenForAnUncappedPlan() throws {
