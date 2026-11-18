@@ -6,6 +6,8 @@ var targets: [Target] = [
     .target(name: "RoutingCore"),
     .target(name: "BrightnessCore"),
     .target(name: "EqualizerCore"),
+    .target(name: "EqualizerEngineCore", dependencies: ["EqualizerCore", "RoutingCore"]),
+    .testTarget(name: "EqualizerEngineCoreTests", dependencies: ["EqualizerEngineCore"]),
     .testTarget(name: "EqualizerCoreTests", dependencies: ["EqualizerCore"]),
     .testTarget(name: "RoutingCoreTests", dependencies: ["RoutingCore"]),
     .testTarget(name: "BrightnessCoreTests", dependencies: ["BrightnessCore"])
