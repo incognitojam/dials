@@ -84,6 +84,33 @@ Band counts cluster hard: 11,560 of 12,594 profiles have exactly ten bands, the 
 from 2 to 20. Q ranges from 0.15 to 12 and centre frequencies from 8.5 Hz to 20 kHz, so
 the coefficient maths has to stay stable at both ends of the audio band.
 
+## How curves are computed
+
+`EqualizerCore` decodes an OPRA profile or imports an AutoEq paste. An unknown or
+malformed band rejects the profile. Missing band gain defaults to 0 dB. Low-pass and
+high-pass filters support Butterworth slopes from 6 to 36 dB/octave and default to 12.
+Text import accepts the centre-frequency shelves `LSC` and `HSC` with Q. It rejects
+the other shelf forms and ambiguous grouped numbers such as `1,000`. See the
+[Equalizer APO filter reference](https://sourceforge.net/p/equalizerapo/wiki/Configuration%20reference/#filter).
+
+`EqualizerPlan(profile, sampleRate: rate)` designs Double-precision sections using
+the [RBJ Audio EQ Cookbook](https://www.w3.org/TR/audio-eq-cookbook/). Every band
+below Nyquist is eligible. Design frequencies stop at 0.49 times the sample rate
+to keep poles away from Nyquist. At or above Nyquist a low-pass is bypassed and a
+low shelf applies its broadband gain. High-pass, band-pass, band-stop, high shelf
+and peak bands use the clamped frequency. The plan takes whole bands in priority
+order until the next one would exceed its 24 inline sections. Compilation can report
+the dropped band indices to the caller.
+
+For a thumbnail, `EqualizerPlan.thumbnail(profile)` defaults to 48 kHz.
+`magnitudeDB(at: frequencies)` returns the combined response in input order, negative
+infinity at filter zeros and NaN outside DC through Nyquist. The level-matched dry
+gain is the square root of the mean squared magnitude, including preamp, at the
+midpoints of 256 equal logarithmic intervals from 20 Hz to the lower of 20 kHz and
+Nyquist. Each bin is weighted by the power response of the two BS.1770 K-weighting
+stages. This estimates the change in perceived level for pink noise while giving
+sub-bass less weight. A recording’s spectrum can change the result.
+
 ## Variants are products, not settings
 
 OPRA models the state a headphone is worn in as part of its identity:

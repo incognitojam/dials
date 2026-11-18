@@ -5,6 +5,8 @@ import PackageDescription
 var targets: [Target] = [
     .target(name: "RoutingCore"),
     .target(name: "BrightnessCore"),
+    .target(name: "EqualizerCore"),
+    .testTarget(name: "EqualizerCoreTests", dependencies: ["EqualizerCore"]),
     .testTarget(name: "RoutingCoreTests", dependencies: ["RoutingCore"]),
     .testTarget(name: "BrightnessCoreTests", dependencies: ["BrightnessCore"])
 ]
