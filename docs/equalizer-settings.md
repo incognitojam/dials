@@ -52,4 +52,8 @@ The session follows the settled default output, suspends below 32 kHz and compil
 profile at the tap's negotiated rate. It requests 128 frames on the aggregate. Profile
 updates keep the running tap. Switching off releases it. A callback stall during active
 playback releases the tap before IO shutdown, which can take longer. After an observed
-failure, edit the file or change outputs to retry. Inspect **Activity** for the reason.
+failure, edit the file or change outputs to retry. After two failures on the same output,
+save an edit to retry it. Inspect **Activity** for the reason. The watchdog checks other
+processes and callback progress every 50 ms with a 350 ms gap tolerance. Device removal
+and a loss of all aggregate output channels both release the tap. A whole-process freeze
+also freezes the watchdog; force-quit neqMac to release the mute in that case.

@@ -27,7 +27,9 @@ final class AppModel: ObservableObject {
         let model = AppModel()
         if #available(macOS 14.2, *) {
             let url = URL.applicationSupportDirectory.appending(path: "neqMac/equalizer.json")
-            model.equalizer = EqualizerController(url: url, report: { [weak model] status in
+            model.equalizer = EqualizerController(url: url, didTearDown: { [weak model] in
+                DispatchQueue.main.async { model?.appendEvent("Equalizer torn down", level: .info) }
+            }, report: { [weak model] status in
                 DispatchQueue.main.async { model?.equalizerChanged(status) }
             }, diagnostic: { [weak model] message in
                 DispatchQueue.main.async { model?.appendEvent(message, level: .warning) }
@@ -45,9 +47,8 @@ final class AppModel: ObservableObject {
 
     private func equalizerChanged(_ status: SessionStatus) {
         switch status {
-        case .starting: break
+        case .starting, .idle: break
         case .running: appendEvent("Equalizer applied", level: .success)
-        case .idle: appendEvent("Equalizer torn down", level: .info)
         case .suspended(let reason): appendEvent("Equalizer suspended · " + reason, level: .warning)
         case .failed(let reason): appendEvent("Equalizer failed · " + reason, level: .warning)
         }
@@ -204,6 +205,11 @@ final class AppModel: ObservableObject {
     func refreshHardwareState() {
         do {
             let refreshedDevices = RuleMerging.restoringKnownNames(in: try audioClient.devices(), from: policy.allRules)
+            if let equalizer {
+                for old in outputDevices where !refreshedDevices.contains(where: { $0.direction == .output && $0.audioObjectID == old.audioObjectID }) {
+                    equalizer.disconnected(old)
+                }
+            }
             devices = refreshedDevices
             defaultInputID = try audioClient.defaultDeviceID(for: .input)
             defaultOutputID = try audioClient.defaultDeviceID(for: .output)
