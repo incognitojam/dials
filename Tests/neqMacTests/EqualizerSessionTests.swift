@@ -13,11 +13,10 @@ final class EqualizerSessionTests: XCTestCase {
         var onStop: (() -> Void)?
         var onConfigure: (() -> Void)?
         var deviceGone = false
-        var zeroOutputChannels = false
         var onRemovalRead: (() -> Void)?
         var removed: Bool { onRemovalRead?(); return deviceGone }
         var layoutMismatch = false
-        var otherProcessPlaying = false
+        var otherProcessPlaying: Bool? = false
         var heartbeat: UInt64 = 0
         func step(_ name: String) throws {
             calls.append(name)
@@ -63,19 +62,20 @@ final class EqualizerSessionTests: XCTestCase {
             engine.reconcile(desired, output: output) { _ in audio }
             let session = try XCTUnwrap(engine.session)
             let monitor = session.monitor
+            monitor.setPlaying(false, at: 0)
             XCTAssertNil(monitor.check(now: 0))
+            monitor.setPlaying(false, at: 10)
             XCTAssertNil(monitor.check(now: 10))
             monitor.setPlaying(true)
             XCTAssertNil(monitor.check(now: 11))
             XCTAssertNil(monitor.check(now: 11.34))
             audio.heartbeat += 1
             XCTAssertNil(monitor.check(now: 11.36))
-            monitor.setPlaying(false)
+            monitor.setPlaying(false, at: 14)
             XCTAssertNil(monitor.check(now: 14))
             monitor.setPlaying(true)
             XCTAssertNil(monitor.check(now: 20))
             audio.deviceGone = true
-            audio.zeroOutputChannels = !notificationFirst
             for notification in [notificationFirst, !notificationFirst] {
                 if notification {
                     if engine.session != nil { engine.reconcile(desired, output: output) { _ in audio } }
@@ -91,11 +91,13 @@ final class EqualizerSessionTests: XCTestCase {
 
     func testActiveExpiryFormatAndRetarget() throws {
         let audio = Backend()
-        let engine = SessionEngine { _ in }
+        var statuses = [SessionStatus]()
+        let engine = SessionEngine { statuses.append($0) }
         engine.reconcile(desired, output: output) { _ in audio }
         engine.reconcile(.process(profile, try EqualizerPlan(profile.parameters, sampleRate: 96_000)), output: output, formatChanged: true) { _ in XCTFail(); return audio }
         XCTAssertEqual(audio.calls, ["tap","aggregate","configure","io","start","configure"])
         XCTAssertEqual(audio.rates, [48_000, 96_000])
+        XCTAssertEqual(statuses, [.starting, .running])
         let next = AudioDevice(audioObjectID: 102, uid: "second", name: "Second DAC", direction: .output, transportType: kAudioDeviceTransportTypeUSB)
         let other = Backend()
         engine.reconcile(desired, output: next) { _ in other }
@@ -109,6 +111,38 @@ final class EqualizerSessionTests: XCTestCase {
         other.onStop = nil
         XCTAssertEqual(engine.status, .failed("Audio callback stalled"))
         XCTAssertEqual(Array(other.calls.suffix(4)), teardown)
+    }
+
+    func testFailedOrStaleActivityPollArmsWatchdog() throws {
+        for failed in [false, true] {
+            let audio = Backend()
+            let guardThread = SessionGuard(audio)
+            try guardThread.createTap()
+            guardThread.setPlaying(false, at: 1)
+            XCTAssertNil(guardThread.check(now: 1.24))
+            if failed { guardThread.setPlaying(nil, at: 1.24) }
+            let armed = failed ? 1.24 : 1.26
+            XCTAssertNil(guardThread.check(now: armed))
+            XCTAssertNil(guardThread.check(now: armed + 0.34))
+            XCTAssertEqual(guardThread.check(now: armed + 0.36), .failed("Audio callback stalled"))
+            XCTAssertEqual(audio.calls, ["tap", "unmute"])
+        }
+    }
+
+    func testLayoutExpiryAllowsOneFreshEvaluationAfterTeardown() throws {
+        let engine = SessionEngine { _ in }
+        var tokens = [UUID]()
+        engine.scheduleLayoutRetry = { tokens.append($0) }
+        let audio = Backend()
+        for attempt in 0...1 {
+            engine.reconcile(desired, output: output) { _ in audio }
+            let session = try XCTUnwrap(engine.session)
+            engine.finish(session, reason: .suspended("Tap input layout no longer verified"))
+            XCTAssertEqual(Array(audio.calls.suffix(4)), teardown)
+            engine.reconcile(desired, output: output) { _ in XCTFail("Premature retry"); return audio }
+            XCTAssertEqual(tokens.count, 1)
+            XCTAssertEqual(engine.resumeLayoutRetry(tokens[0]), attempt == 0)
+        }
     }
 
     func testLowRateSuspendsAndSwitchingOffReleasesTheResumedSession() {
@@ -161,12 +195,10 @@ final class EqualizerSessionTests: XCTestCase {
         let session = try XCTUnwrap(engine.session)
         session.monitor.setPlaying(true)
         XCTAssertNil(session.monitor.check(now: 0))
-        audio.zeroOutputChannels = true
         audio.failure = "configure"
         engine.reconcile(desired, output: output, formatChanged: true) { _ in XCTFail(); return audio }
         XCTAssertNil(session.monitor.check(now: 0.6))
         XCTAssertTrue(engine.session === session)
-        audio.zeroOutputChannels = false
         audio.failure = nil
         engine.reconcile(desired, output: output, formatChanged: true) { _ in XCTFail(); return audio }
         XCTAssertEqual(engine.status, .running)

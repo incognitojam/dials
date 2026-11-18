@@ -34,14 +34,15 @@ struct AudioObservation {
 }
 
 @available(macOS 14.2, *)
-final class CoreAudioTap: TapDevice {
+class CoreAudioTap: TapDevice {
     let output: AudioDevice
     private let queue: DispatchQueue
     private let changed: () -> Void
     private let diagnostic: (String) -> Void
     private let stillWanted: () -> Bool
     private let allowDuplexInput: Bool
-    private var tapStream: AudioStreamID?
+    private var initialTapStream: AudioStreamID?
+    private var hadPhysicalInputs = false
     private var activeSubTap: AudioObjectID?
     private var attachedOutput = false
     private var layout: TapLayout?
@@ -97,13 +98,23 @@ final class CoreAudioTap: TapDevice {
         return members
     }
 
-    func createTap() throws {
+    func physicalInputsBeforeCapture() throws -> (streams: Int, widths: [UInt32]) {
         let inputs = try streams(output.audioObjectID, kAudioObjectPropertyScopeInput)
         let outputs = try streams(output.audioObjectID, kAudioObjectPropertyScopeOutput)
         let inputWidths = try widths(output.audioObjectID, kAudioObjectPropertyScopeInput)
         let outputWidths = try widths(output.audioObjectID, kAudioObjectPropertyScopeOutput)
         diagnostic("USB input: \(inputs.count) streams, buffers \(inputWidths); output: \(outputs.count) streams, buffers \(outputWidths)")
-        try TapLayout.requireConsent(inputStreams: inputs.count, bufferWidths: inputWidths, allowed: allowDuplexInput)
+        return (inputs.count, inputWidths)
+    }
+
+    func createTap() throws {
+        let input = try physicalInputsBeforeCapture()
+        try TapLayout.requireConsent(inputStreams: input.streams, bufferWidths: input.widths, allowed: allowDuplexInput)
+        hadPhysicalInputs = input.streams > 0 || input.widths.contains(where: { $0 > 0 })
+        try createProcessTap()
+    }
+
+    func createProcessTap() throws {
         var key = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyTranslatePIDToProcessObject,
             mScope: global, mElement: kAudioObjectPropertyElementMain)
         var pid = getpid()
@@ -147,12 +158,12 @@ final class CoreAudioTap: TapDevice {
                 Thread.sleep(forTimeInterval: 0.025)
             }
             guard initial.count == 1, try members(kAudioAggregateDevicePropertyFullSubDeviceList).isEmpty,
-                  try members(kAudioAggregateDevicePropertyTapList) == [uuid.uuidString] else { throw SessionError.layout("Could not identify one input on the tap-only aggregate") }
+                  try TapLayout.containsOnlyTap(members(kAudioAggregateDevicePropertyTapList), uuid) else { throw SessionError.layout("Could not identify one input on the tap-only aggregate") }
             let subtaps: [AudioObjectID] = try CoreAudioClient.readArray(objectID: aggregate,
                 selector: kAudioAggregateDevicePropertySubTapList, scope: global)
             guard subtaps.count == 1 else { throw SessionError.layout("Tap-only aggregate has no unique active sub-tap") }
             activeSubTap = subtaps[0]
-            tapStream = initial[0]
+            initialTapStream = initial[0]
             diagnostic("Tap-only aggregate input stream ID \(initial[0]), active sub-tap ID \(subtaps[0])")
             try CoreAudioClient.writeScalar([output.uid] as CFArray, objectID: aggregate,
                 selector: kAudioAggregateDevicePropertyFullSubDeviceList, scope: global)
@@ -203,24 +214,23 @@ final class CoreAudioTap: TapDevice {
         let outputs = try streams(aggregate, kAudioObjectPropertyScopeOutput)
         let inputWidths = try widths(aggregate, kAudioObjectPropertyScopeInput)
         let outputWidths = try widths(aggregate, kAudioObjectPropertyScopeOutput)
-        if !allowDuplexInput {
-            let physicalInputs = try streams(output.audioObjectID, kAudioObjectPropertyScopeInput)
-            if !physicalInputs.isEmpty || inputs.count > 1 { throw SessionError.layout("Duplex input requires allowDuplexInput") }
-        }
+        let physicalInputs = try streams(output.audioObjectID, kAudioObjectPropertyScopeInput)
+        let physicalWidths = try widths(output.audioObjectID, kAudioObjectPropertyScopeInput)
+        try TapLayout.requireConsent(inputStreams: physicalInputs.count, bufferWidths: physicalWidths, allowed: allowDuplexInput)
+        hadPhysicalInputs = hadPhysicalInputs || !physicalInputs.isEmpty || physicalWidths.contains(where: { $0 > 0 })
         let frames: UInt32 = try CoreAudioClient.readScalar(objectID: aggregate, selector: kAudioDevicePropertyBufferFrameSize, scope: global)
         diagnostic("Tap format \(format.mSampleRate) Hz, \(format.mChannelsPerFrame) ch, flags \(format.mFormatFlags), \(format.mBitsPerChannel) bits, \(format.mBytesPerFrame) bytes/frame. Aggregate input IDs \(inputs), buffers \(inputWidths); outputs \(outputs), buffers \(outputWidths); IO buffer \(frames) frames")
         guard !outputs.isEmpty, outputWidths.contains(where: { $0 > 0 }), !inputs.isEmpty else {
             throw TapError(message: "Aggregate stream configuration is settling")
         }
-        guard let tapStream, inputs.contains(tapStream) else {
-            throw SessionError.layout("Tap stream identity did not survive output attachment or output unavailable")
-        }
+        let tapStream = try TapLayout.identify(initial: initialTapStream, streams: inputs,
+            physicalCount: physicalInputs.count, duplex: hadPhysicalInputs)
         let devices: [AudioObjectID] = try CoreAudioClient.readArray(objectID: aggregate,
             selector: kAudioAggregateDevicePropertyActiveSubDeviceList, scope: global)
         let subtaps: [AudioObjectID] = try CoreAudioClient.readArray(objectID: aggregate,
             selector: kAudioAggregateDevicePropertySubTapList, scope: global)
         guard let activeSubTap, subtaps == [activeSubTap], devices.count == 1, try members(kAudioAggregateDevicePropertyFullSubDeviceList) == [output.uid],
-              try members(kAudioAggregateDevicePropertyTapList) == [uuid.uuidString] else { throw SessionError.layout("Aggregate output is unverified") }
+              try TapLayout.containsOnlyTap(members(kAudioAggregateDevicePropertyTapList), uuid) else { throw SessionError.layout("Aggregate output is unverified") }
         let virtual: AudioStreamBasicDescription = try CoreAudioClient.readScalar(objectID: tapStream,
             selector: kAudioStreamPropertyVirtualFormat, scope: global)
         let start: UInt32 = try CoreAudioClient.readScalar(objectID: tapStream, selector: kAudioStreamPropertyStartingChannel, scope: global)
@@ -231,9 +241,13 @@ final class CoreAudioTap: TapDevice {
                 selector: kAudioStreamPropertyVirtualFormat, scope: global)
             guard TapLayout.supported(outputFormat) else { throw SessionError.layout("Unsupported aggregate output format") }
         }
-        if let io { try verifyUsage(io, selection, install: false) }
+        if let io, let render {
+            RenderContext.invalidate(render)
+            try verifyUsage(io, selection, install: false)
+        }
         layout = selection
-        diagnostic("Verified tap-only stream ID \(tapStream) at input stream \(selection.streamIndex), starting channel \(start), first buffer \(selection.buffers.firstBuffer), \(selection.buffers.bufferCount) buffer(s)")
+        let evidence = hadPhysicalInputs ? "retained tap-only ID" : "sole input on output-only device"
+        diagnostic("Verified \(evidence), stream ID \(tapStream) at input stream \(selection.streamIndex), starting channel \(start), first buffer \(selection.buffers.firstBuffer), \(selection.buffers.bufferCount) buffer(s)")
         if plan.headroomDB > 0 { diagnostic(String(format: "Applied %.2f dB of equalizer headroom", plan.headroomDB)) }
         if let render {
             RenderContext.publish(render, plan: plan, channels: Int(format.mChannelsPerFrame), layout: selection.buffers)
@@ -247,10 +261,10 @@ final class CoreAudioTap: TapDevice {
 
     private func verifyUsage(_ io: AudioDeviceIOProcID, _ selection: TapLayout, install: Bool) throws {
         let before = try streams(aggregate, kAudioObjectPropertyScopeInput)
+        let tapStream = selection.tapID
         guard before.count == selection.streamCount, before[Int(selection.streamIndex)] == tapStream else {
             throw SessionError.layout("Tap stream moved before input mask verification")
         }
-        guard let tapStream else { throw SessionError.layout("Missing tap stream identity") }
         let format: AudioStreamBasicDescription = try CoreAudioClient.readScalar(objectID: tap, selector: kAudioTapPropertyFormat, scope: global)
         let virtual: AudioStreamBasicDescription = try CoreAudioClient.readScalar(objectID: tapStream, selector: kAudioStreamPropertyVirtualFormat, scope: global)
         let start: UInt32 = try CoreAudioClient.readScalar(objectID: tapStream, selector: kAudioStreamPropertyStartingChannel, scope: global)
@@ -335,19 +349,18 @@ final class CoreAudioTap: TapDevice {
         return connected?.contains(output.audioObjectID) == false
     }
 
-    var otherProcessPlaying: Bool {
-        let running: UInt32? = try? CoreAudioClient.readScalar(objectID: output.audioObjectID,
-            selector: kAudioDevicePropertyDeviceIsRunningSomewhere, scope: global)
-        guard running == 1 else { return false }
-        let objects: [AudioObjectID] = (try? CoreAudioClient.readArray(objectID: AudioObjectID(kAudioObjectSystemObject),
-            selector: kAudioHardwarePropertyProcessObjectList, scope: global)) ?? []
-        return objects.contains { object in
-            guard object != ownProcess else { return false }
-            let running: UInt32? = try? CoreAudioClient.readScalar(objectID: object, selector: kAudioProcessPropertyIsRunningOutput, scope: global)
-            guard running == 1 else { return false }
-            let devices: [AudioObjectID]? = try? CoreAudioClient.readArray(objectID: object, selector: kAudioProcessPropertyDevices,
-                scope: kAudioObjectPropertyScopeOutput)
-            return devices?.contains(output.audioObjectID) == true
-        }
+    var otherProcessPlaying: Bool? {
+        do {
+            let objects: [AudioObjectID] = try CoreAudioClient.readArray(objectID: AudioObjectID(kAudioObjectSystemObject),
+                selector: kAudioHardwarePropertyProcessObjectList, scope: global)
+            for object in objects where object != ownProcess {
+                let running: UInt32 = try CoreAudioClient.readScalar(objectID: object, selector: kAudioProcessPropertyIsRunningOutput, scope: global)
+                if running == 0 { continue }
+                let devices: [AudioObjectID] = try CoreAudioClient.readArray(objectID: object, selector: kAudioProcessPropertyDevices,
+                    scope: kAudioObjectPropertyScopeOutput)
+                if devices.contains(output.audioObjectID) { return true }
+            }
+            return false
+        } catch { return nil }
     }
 }

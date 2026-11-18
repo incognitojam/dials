@@ -18,7 +18,7 @@ protocol TapDevice: AnyObject {
     func destroyAggregate()
 
     var removed: Bool { get }
-    var otherProcessPlaying: Bool { get }
+    var otherProcessPlaying: Bool? { get }
     var heartbeat: UInt64 { get }
     var layoutMismatch: Bool { get }
 }
@@ -37,6 +37,7 @@ enum SessionError: LocalizedError {
 // Coordinates the watchdog thread and the serial session queue. Never entered from IO.
 final class SessionGuard {
     static let callbackTolerance: TimeInterval = 0.350
+    static let activityFreshness: TimeInterval = 0.250
     private let lock = NSLock()
     private let device: TapDevice
     private var lastBeat: UInt64?
@@ -52,12 +53,14 @@ final class SessionGuard {
     }
 
     private var released = false
-    private var playing = false
+    private var playing: Bool?
+    private var lastPoll: TimeInterval?
 
-    func setPlaying(_ value: Bool) {
+    func setPlaying(_ value: Bool?, at completed: TimeInterval = ProcessInfo.processInfo.systemUptime) {
         lock.lock()
         defer { lock.unlock() }
-        if !value { lastBeat = nil }
+        lastPoll = completed
+        if value == false { lastBeat = nil }
         playing = value
     }
 
@@ -72,7 +75,7 @@ final class SessionGuard {
         defer { lock.unlock() }
         if let ended { return ended }
         let beat = device.heartbeat
-        guard playing else { return nil }
+        if let lastPoll, playing == false, now - lastPoll <= Self.activityFreshness { return nil }
         if lastBeat != beat {
             since = now
             lastBeat = beat
@@ -144,6 +147,7 @@ final class EqualizerSession {
     func watch(on queue: DispatchQueue, ended: @escaping (EqualizerSession, SessionStatus) -> Void) {
         // HAL queries can wait behind IO. Keep them off the heartbeat thread and outside its lock.
         let poll = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "dev.neqmac.equalizer.activity"))
+        monitor.setPlaying(false)
         poll.setEventHandler { [backend, monitor] in monitor.setPlaying(backend.otherProcessPlaying) }
         poll.schedule(deadline: .now(), repeating: .milliseconds(50))
         activityPoll = poll
@@ -181,6 +185,10 @@ final class SessionEngine {
     private var appliedRate: Double?
     private var formatRetries = 0
     private var requiresEdit = false
+    private var layoutRetryToken: UUID?
+    private var usedLayoutRetry = false
+    var scheduleLayoutRetry: ((UUID) -> Void)?
+
     private let diagnostic: (String) -> Void
     private var failures: [String: Int] = [:]
     private let didTearDown: () -> Void
@@ -190,6 +198,13 @@ final class SessionEngine {
         self.diagnostic = diagnostic
         self.didTearDown = didTearDown
         self.report = report
+    }
+
+    func resumeLayoutRetry(_ token: UUID) -> Bool {
+        guard layoutRetryToken == token else { return false }
+        layoutRetryToken = nil
+        requiresEdit = false
+        return true
     }
 
     func reconcile(_ desired: DesiredEqualizer, output: AudioDevice?, retry: Bool = false,
@@ -203,6 +218,10 @@ final class SessionEngine {
         if changed {
             if let session { finish(session, reason: .idle) }
             target = output
+        }
+        if changed || retry {
+            layoutRetryToken = nil
+            usedLayoutRetry = false
             requiresEdit = false
         }
         guard case let .process(profile, plan) = desired, let output else {
@@ -211,7 +230,7 @@ final class SessionEngine {
             if let session { finish(session, reason: next) } else { publish(next) }
             return
         }
-        if retry { failures.removeValue(forKey: output.uid); requiresEdit = false }
+        if retry { failures.removeValue(forKey: output.uid) }
         if requiresEdit { return }
         if !changed && !retry, case .failed = status { return }
         if failures[output.uid, default: 0] >= 2 {
@@ -223,7 +242,6 @@ final class SessionEngine {
                 if applied != profile || appliedRate != plan.sampleRate || formatChanged {
                     try session.update(profile: profile, plan: plan)
                     formatRetries = 0
-                    report(.running)
                 }
             } else {
                 publish(.starting)
@@ -272,6 +290,12 @@ final class SessionEngine {
         publish(result)
         old.closeIO()
         if old.monitor.hasTap { didTearDown() }
+        if result == .suspended("Tap input layout no longer verified"), !usedLayoutRetry {
+            usedLayoutRetry = true
+            let token = UUID()
+            layoutRetryToken = token
+            scheduleLayoutRetry?(token)
+        }
     }
 
     private func publish(_ next: SessionStatus) {

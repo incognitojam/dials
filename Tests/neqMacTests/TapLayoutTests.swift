@@ -2,6 +2,7 @@ import CoreAudio
 import EqualizerCore
 import EqualizerIO
 import EqualizerEngineCore
+import os.lock
 import XCTest
 @testable import neqMac
 
@@ -111,6 +112,40 @@ final class TapLayoutTests: XCTestCase {
         }
     }
 
+    func testOutputOnlyReissuedIDAndDuplexEdgeIdentity() throws {
+        XCTAssertEqual(try TapLayout.identify(initial: 22, streams: [33], physicalCount: 0, duplex: false), 33)
+        for streams: [AudioStreamID] in [[22, 4, 5], [4, 5, 22]] {
+            XCTAssertEqual(try TapLayout.identify(initial: 22, streams: streams, physicalCount: 2, duplex: true), 22)
+        }
+        for (streams, count, duplex) in [([4, 22, 5], 2, true), ([4, 5, 33], 2, true),
+                                         ([4, 22], 2, true), ([33], 0, true), ([22, 4], 0, false)] {
+            XCTAssertThrowsError(try TapLayout.identify(initial: 22, streams: streams.map(UInt32.init), physicalCount: count, duplex: duplex))
+        }
+    }
+
+    func testSoleTapUUIDIgnoresCaseAndRejectsInvalidMembers() {
+        let uuid = UUID()
+        XCTAssertTrue(TapLayout.containsOnlyTap([uuid.uuidString.lowercased()], uuid))
+        for members in [[], ["invalid"], [UUID().uuidString], [uuid.uuidString, uuid.uuidString]] {
+            XCTAssertFalse(TapLayout.containsOnlyTap(members, uuid))
+        }
+    }
+
+    @available(macOS 14.2, *)
+    func testCreateTapChecksConsentBeforeCapture() throws {
+        final class CaptureSpy: CoreAudioTap {
+            var captures = 0
+            override func physicalInputsBeforeCapture() throws -> (streams: Int, widths: [UInt32]) { (1, [2]) }
+            override func createProcessTap() throws { captures += 1 }
+        }
+        let dac = AudioDevice(audioObjectID: 90, uid: "test-dac", name: "Test DAC", direction: .output, transportType: kAudioDeviceTransportTypeUSB)
+        for consent in [false, true] {
+            let tap = CaptureSpy(output: dac, queue: .main, allowDuplexInput: consent, changed: {})
+            if consent { try tap.createTap() } else { XCTAssertThrowsError(try tap.createTap()) }
+            XCTAssertEqual(tap.captures, consent ? 1 : 0)
+        }
+    }
+
     func testDuplexGateRequiresExplicitConsentBeforeCapture() {
         XCTAssertNoThrow(try TapLayout.requireConsent(inputStreams: 0, bufferWidths: [], allowed: false))
         XCTAssertThrowsError(try TapLayout.requireConsent(inputStreams: 1, bufferWidths: [], allowed: false))
@@ -147,6 +182,35 @@ final class TapLayoutTests: XCTestCase {
 }
 
 extension TapLayoutTests {
+    func testMaskWritesOnStartAndRepairsOnlyDriftedReadback() {
+        struct Mask {
+            var flags: [UInt32] = [1, 1]
+            var calls: [String] = []
+            static let state = OSAllocatedUnfairLock(initialState: Mask())
+        }
+        let access: EQUsageAccess = { write, _, _, usage in
+            guard let usage else { return -1 }
+            let offset = MemoryLayout<AudioHardwareIOProcStreamUsage>.offset(of: \.mStreamIsOn)!
+            let flags = UnsafeMutableRawPointer(usage).advanced(by: offset).assumingMemoryBound(to: UInt32.self)
+            let written = write ? [flags[0], flags[1]] : nil
+            let current = Mask.state.withLock { state in
+                state.calls.append(write ? "write" : "read")
+                if let written { state.flags = written }
+                return state.flags
+            }
+            if !write { flags[0] = current[0]; flags[1] = current[1] }
+            return noErr
+        }
+        let io: AudioDeviceIOProc = { _, _, _, _, _, _, _ in 0 }
+        for (install, flags, expected) in [(true, [0, 1], ["write", "read"]), (false, [0, 1], ["read"]),
+                                           (false, [1, 1], ["read", "write", "read"])] {
+            Mask.state.withLock { $0 = Mask(flags: flags.map(UInt32.init)) }
+            XCTAssertEqual(EQTapStreamUsage(1, io, 2, 1, install, access), noErr)
+            XCTAssertEqual(Mask.state.withLock { $0.calls }, expected)
+            XCTAssertEqual(Mask.state.withLock { $0.flags }, [0, 1])
+        }
+    }
+
     func testIOProcInputMaskAndReadback() {
         let io: AudioDeviceIOProc = { _, _, _, _, _, _, _ in 0 }
         // Model three streams with the tap in the middle. Change the returned mask

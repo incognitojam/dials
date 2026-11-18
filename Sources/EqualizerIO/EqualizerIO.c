@@ -28,25 +28,38 @@ OSStatus EQHALStreamUsage(bool write, AudioObjectID device, UInt32 *bytes, Audio
     return AudioObjectGetPropertyData(device, &key, 0, NULL, bytes, usage);
 }
 
+static OSStatus readMask(AudioObjectID device, AudioDeviceIOProcID io, UInt32 count, UInt32 tap,
+                         AudioHardwareIOProcStreamUsage *usage, UInt32 size, EQUsageAccess access, bool *matches) {
+    memset(usage, 0, size);
+    usage->mIOProc = io;
+    usage->mNumberStreams = count;
+    UInt32 bytes = size;
+    OSStatus status = access(false, device, &bytes, usage);
+    if (status != noErr) return status;
+    if (bytes != size || usage->mNumberStreams != count) return kAudioHardwareBadPropertySizeError;
+    *matches = true;
+    for (UInt32 i = 0; i < count; ++i)
+        if ((usage->mStreamIsOn[i] != 0) != (i == tap)) *matches = false;
+    return noErr;
+}
+
 OSStatus EQTapStreamUsage(AudioObjectID device, AudioDeviceIOProcID io, UInt32 count, UInt32 tap, bool install, EQUsageAccess access) {
     size_t size = offsetof(AudioHardwareIOProcStreamUsage, mStreamIsOn) + (size_t)count * sizeof(UInt32);
     if (tap >= count || size > UINT32_MAX) return kAudioHardwareIllegalOperationError;
-    AudioHardwareIOProcStreamUsage *usage = calloc(1, size);
+    AudioHardwareIOProcStreamUsage *usage = malloc(size);
     if (!usage) return kAudioHardwareUnspecifiedError;
-    usage->mIOProc = io;
-    usage->mNumberStreams = count;
-    usage->mStreamIsOn[tap] = 1;
-    UInt32 bytes = (UInt32)size;
-    OSStatus status = install ? access(true, device, &bytes, usage) : noErr;
-    if (status == noErr) {
+    bool matches = false;
+    OSStatus status = noErr;
+    if (!install) status = readMask(device, io, count, tap, usage, (UInt32)size, access, &matches);
+    if (status == noErr && !matches) {
         memset(usage, 0, size);
         usage->mIOProc = io;
         usage->mNumberStreams = count;
-        status = access(false, device, &bytes, usage);
-        if (status == noErr && (bytes != size || usage->mNumberStreams != count))
-            status = kAudioHardwareBadPropertySizeError;
-        for (UInt32 i = 0; status == noErr && i < count; ++i)
-            if ((usage->mStreamIsOn[i] != 0) != (i == tap)) status = kAudioHardwareIllegalOperationError;
+        usage->mStreamIsOn[tap] = 1;
+        UInt32 bytes = (UInt32)size;
+        status = access(true, device, &bytes, usage);
+        if (status == noErr) status = readMask(device, io, count, tap, usage, (UInt32)size, access, &matches);
+        if (status == noErr && !matches) status = kAudioHardwareIllegalOperationError;
     }
     free(usage);
     return status;

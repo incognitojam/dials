@@ -2,6 +2,7 @@ import CoreAudio
 import EqualizerIO
 
 struct TapLayout {
+    let tapID: AudioStreamID
     let streamIndex: UInt32
     let streamCount: UInt32
     let buffers: EQInputLayout
@@ -29,10 +30,27 @@ struct TapLayout {
               bufferWidths[first..<(first + planes)].allSatisfy({ $0 == width }) else {
             throw SessionError.layout("Tap channel range does not match aggregate input buffers")
         }
+        self.tapID = tapID
         self.streamIndex = UInt32(streamIndex)
         streamCount = UInt32(streams.count)
         buffers = EQInputLayout(firstBuffer: UInt32(first), bufferCount: UInt32(planes),
                                 totalBuffers: UInt32(bufferWidths.count), channelsPerBuffer: width)
+    }
+
+    static func containsOnlyTap(_ members: [String], _ uuid: UUID) -> Bool {
+        members.count == 1 && UUID(uuidString: members[0]) == uuid
+    }
+
+    static func identify(initial: AudioStreamID?, streams: [AudioStreamID], physicalCount: Int,
+                         duplex: Bool) throws -> AudioStreamID {
+        guard streams.count == physicalCount + 1 else {
+            throw SessionError.layout("Aggregate must contain one tap stream plus every physical input stream")
+        }
+        if !duplex, physicalCount == 0 { return streams[0] }
+        guard physicalCount > 0, let initial, streams.first == initial || streams.last == initial else {
+            throw SessionError.layout("Duplex tap stream identity or position could not be verified")
+        }
+        return initial
     }
 
     static func requireConsent(inputStreams: Int, bufferWidths: [UInt32], allowed: Bool) throws {
