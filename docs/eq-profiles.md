@@ -111,6 +111,28 @@ Nyquist. Each bin is weighted by the power response of the two BS.1770 K-weighti
 stages. This estimates the change in perceived level for pink noise while giving
 sub-bass less weight. A recording’s spectrum can change the result.
 
+## Rendering a profile
+
+Allocate one `EqualizerProcessor` for all stream channels before starting playback.
+It accepts interleaved or planar Float32 buffers of any length and keeps a separate
+Double filter history for each channel. The IO thread installs a copied plan between
+buffers. A profile or mode change gives the incoming chain 10 ms of live input
+to build its history, then crossfades the two outputs over 20 ms. Further changes
+during warm-up replace the incoming chain immediately. Once both chains are audible,
+the newest request waits for the fade to finish. Compare mode passes
+the dry signal at the plan’s K-weighted pink-noise gain, and off mode passes it at unity.
+
+A flowing sample-rate change uses the same crossfade. Only an explicit stream
+restart (`reset()`) discards both the audible transition and the old history and
+fades in over 5 ms. The 30 ms transition controls the mix. Low-bass, high-Q bands
+can take hundreds of milliseconds or longer to settle as the new filter rings up.
+In the synthetic bass-switch probes, high-frequency artefacts stayed at least 117 dB
+below the reference peak.
+
+A non-finite input or output silences the affected sample, clears that channel’s
+histories and starts the same fade for that channel. The processing call reports the
+fault to its caller while the other channels continue.
+
 ## Variants are products, not settings
 
 OPRA models the state a headphone is worn in as part of its identity:

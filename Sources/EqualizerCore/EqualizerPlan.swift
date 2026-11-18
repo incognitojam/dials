@@ -87,6 +87,14 @@ package struct BiquadSections: Sendable, BitwiseCopyable {
         }
     }
 
+    @_noLocks
+    func copy(to destination: UnsafeMutablePointer<BiquadCoefficients>) {
+        withUnsafeBytes(of: storage) { bytes in
+            UnsafeMutableRawPointer(destination).copyMemory(from: bytes.baseAddress!,
+                                                            byteCount: count * MemoryLayout<BiquadCoefficients>.stride)
+        }
+    }
+
     fileprivate mutating func append(_ section: BiquadCoefficients) {
         precondition(count < Self.capacity)
         withUnsafeMutablePointer(to: &storage) {
@@ -161,6 +169,14 @@ package struct EqualizerPlan: Sendable, BitwiseCopyable {
             guard compareGain.isFinite else { throw Invalid.compareGain }
         }
         droppedBandIndices = dropped
+    }
+
+    @_noLocks
+    func matches(_ other: borrowing Self) -> Bool {
+        guard sampleRate == other.sampleRate, preampGain == other.preampGain,
+              compareGain == other.compareGain, sections.count == other.sections.count else { return false }
+        for i in 0..<sections.count where sections[i] != other.sections[i] { return false }
+        return true
     }
 
     package func magnitudeDB(at frequencies: [Double]) -> [Double] {
