@@ -98,7 +98,38 @@ func fail(_ message: String, _ status: OSStatus? = nil) -> Never {
     exit(1)
 }
 
+func channelCount(_ device: AudioObjectID, _ scope: AudioObjectPropertyScope) -> Int {
+    var property = address(kAudioDevicePropertyStreamConfiguration, scope)
+    var size: UInt32 = 0
+    guard AudioObjectGetPropertyDataSize(device, &property, 0, nil, &size) == noErr, size > 0 else { return 0 }
+    let raw = UnsafeMutableRawPointer.allocate(byteCount: Int(size), alignment: 16)
+    defer { raw.deallocate() }
+    guard AudioObjectGetPropertyData(device, &property, 0, nil, &size, raw) == noErr else { return 0 }
+    let list = UnsafeMutableAudioBufferListPointer(raw.assumingMemoryBound(to: AudioBufferList.self))
+    return list.reduce(0) { $0 + Int($1.mNumberChannels) }
+}
+
+func requireDevice(_ option: String, _ uid: String?, _ scope: AudioObjectPropertyScope,
+                   _ direction: String) -> (String, AudioObjectID) {
+    guard let uid else { fail("--\(option) is required; list UIDs with ./build/devices") }
+    guard let found = device(uid: uid) else { fail("no audio device has UID \(uid)") }
+    guard channelCount(found, scope) > 0 else { fail("\(uid) is not an \(direction) device") }
+    return (uid, found)
+}
+
 // ================================================================ arguments
+
+let usage = """
+    usage: TapSpike --out-uid <uid> [--mode control|passthrough|lowpass|silence] [--mic-uid <uid>]
+                    [--level-dbfs <peak>] [--seconds <s>] [--buffer-frames <n>] [--play yes]
+                    [--prefix <path>] [--log <path>] [--pid-file <path>]
+    --level-dbfs sets the peak of the generated noise and clicks, default -30. In passthrough
+    and lowpass the tap also re-emits whatever other apps are playing, at their own level.
+    """
+if CommandLine.arguments.contains("--help") {
+    print(usage)
+    exit(0)
+}
 
 var options: [String: String] = [:]
 var arguments = Array(CommandLine.arguments.dropFirst())
@@ -115,19 +146,26 @@ if let logPath = options["log"] {
     setvbuf(stdout, nil, _IOLBF, 0)
 }
 
+if let pidFile = options["pid-file"] {
+    guard (try? String(getpid()).write(toFile: pidFile, atomically: true, encoding: .utf8)) != nil else {
+        fail("cannot write \(pidFile)")
+    }
+}
+
 let role = options["role"] ?? "parent"
-let seconds = Double(options["seconds"] ?? "6") ?? 6
+guard let seconds = Double(options["seconds"] ?? "6"), seconds > 1 else { fail("--seconds must be more than 1") }
 let prefix = options["prefix"] ?? "/tmp/tap-spike/run"
+let levelDBFS = options["level-dbfs"] ?? "-30"
+guard let level = Double(levelDBFS), level <= 0 else { fail("--level-dbfs must be a peak level at or below 0") }
+let peak = Float(pow(10, level / 20))
 
 // ================================================================ player role
 
 if role == "player" {
-    guard let outputUID = options["out-uid"], let outputDevice = device(uid: outputUID) else {
-        fail("player needs --out-uid naming a real device")
-    }
+    let (_, outputDevice) = requireDevice("out-uid", options["out-uid"], kAudioObjectPropertyScopeOutput, "output")
     let sampleRate = value(outputDevice, kAudioDevicePropertyNominalSampleRate, default: Float64(48000)) ?? 48000
-    let noiseLevel = Float(options["noise-level"] ?? "0.05") ?? 0.05
-    let clickLevel = Float(options["click-level"] ?? "0.35") ?? 0.35
+    let clickLevel = peak * 0.9
+    let noiseLevel = peak * 0.1
     let clickPeriod = Int(sampleRate * 0.5)
     let clickLength = Int(sampleRate * 0.001)
 
@@ -173,8 +211,13 @@ if role == "player" {
         frameCounter += frames
     }
     guard created == noErr, let procID else { fail("player AudioDeviceCreateIOProcIDWithBlock", created) }
-    guard AudioDeviceStart(outputDevice, procID) == noErr else { fail("player AudioDeviceStart") }
-    Thread.sleep(forTimeInterval: seconds)
+    guard AudioDeviceStart(outputDevice, procID) == noErr else {
+        AudioDeviceDestroyIOProcID(outputDevice, procID)
+        fail("player AudioDeviceStart")
+    }
+    let parent = getppid()
+    let deadline = Date().addingTimeInterval(seconds)
+    while Date() < deadline, getppid() == parent { Thread.sleep(forTimeInterval: 0.05) }
     AudioDeviceStop(outputDevice, procID)
     AudioDeviceDestroyIOProcID(outputDevice, procID)
     try? clickTimes.joined(separator: "\n").write(toFile: prefix + "-clicks.txt", atomically: true, encoding: .utf8)
@@ -184,37 +227,73 @@ if role == "player" {
 
 // ================================================================ parent role
 
+guard role == "parent" else { fail("unknown --role \(role)") }
 let mode = options["mode"] ?? "lowpass"
+guard ["control", "passthrough", "lowpass", "silence"].contains(mode) else { fail("unknown --mode \(mode)") }
 let useTap = mode != "control"
+if let scope = options["tap-scope"], scope != "device" {
+    fail("--tap-scope \(scope) is not supported; taps are always bound to --out-uid")
+}
+let bufferFrames: UInt32? = {
+    guard let requested = options["buffer-frames"] else { return nil }
+    guard let frames = UInt32(requested), frames > 0 else { fail("--buffer-frames must be a positive whole number") }
+    return frames
+}()
 
-let systemObject = AudioObjectID(kAudioObjectSystemObject)
-var outputDevice = value(systemObject, kAudioHardwarePropertyDefaultOutputDevice, default: AudioObjectID(0)) ?? 0
-if let uid = options["out-uid"], let match = device(uid: uid) { outputDevice = match }
-guard outputDevice != 0, let outputUID = stringValue(outputDevice, kAudioDevicePropertyDeviceUID) else {
-    fail("no output device")
+let (outputUID, outputDevice) = requireDevice("out-uid", options["out-uid"], kAudioObjectPropertyScopeOutput, "output")
+let requestedMicDevice: AudioObjectID? = options["mic-uid"] == nil ? nil
+    : requireDevice("mic-uid", options["mic-uid"], kAudioObjectPropertyScopeInput, "input").1
+
+var interrupted = false
+var signalSources: [DispatchSourceSignal] = []
+for number in [SIGINT, SIGTERM, SIGHUP] {
+    signal(number, SIG_IGN)
+    let source = DispatchSource.makeSignalSource(signal: number, queue: .global())
+    source.setEventHandler { interrupted = true }
+    source.resume()
+    signalSources.append(source)
 }
 let sampleRate = value(outputDevice, kAudioDevicePropertyNominalSampleRate, default: Float64(48000)) ?? 48000
 
 print("mode          : \(mode)")
+print("level         : \(levelDBFS) dBFS peak")
 print("output        : \(stringValue(outputDevice, kAudioObjectPropertyName) ?? "?") @ \(sampleRate) Hz")
 
 // ---------------------------------------------------------------- tap + aggregate
 
 var tap = AudioObjectID(kAudioObjectUnknown)
 var aggregate = AudioObjectID(kAudioObjectUnknown)
+var tapProcID: AudioDeviceIOProcID?
+var micDevice = AudioObjectID(kAudioObjectUnknown)
+var micProcID: AudioDeviceIOProcID?
+
+func teardown() {
+    if let procID = tapProcID {
+        AudioDeviceStop(aggregate, procID)
+        AudioDeviceDestroyIOProcID(aggregate, procID)
+        tapProcID = nil
+    }
+    if let procID = micProcID {
+        AudioDeviceStop(micDevice, procID)
+        AudioDeviceDestroyIOProcID(micDevice, procID)
+        micProcID = nil
+    }
+    if aggregate != kAudioObjectUnknown {
+        AudioHardwareDestroyAggregateDevice(aggregate)
+        aggregate = AudioObjectID(kAudioObjectUnknown)
+    }
+    if tap != kAudioObjectUnknown {
+        AudioHardwareDestroyProcessTap(tap)
+        tap = AudioObjectID(kAudioObjectUnknown)
+    }
+}
 var tapDescription: CATapDescription?
 
 if useTap {
     guard let ownProcess = processObject(for: getpid()) else { fail("no process object for self") }
-    let scope = options["tap-scope"] ?? "device"
-    let description: CATapDescription
-    if scope == "global" {
-        description = CATapDescription(__stereoGlobalTapButExcludeProcesses: [NSNumber(value: ownProcess)])
-    } else {
-        description = CATapDescription(__excludingProcesses: [NSNumber(value: ownProcess)],
+    let description = CATapDescription(__excludingProcesses: [NSNumber(value: ownProcess)],
                                        andDeviceUID: outputUID,
                                        withStream: 0)
-    }
     description.name = "dials eq spike"
     description.isPrivate = (options["private"] ?? "yes") == "yes"
     switch options["mute"] ?? "mutedWhenTapped" {
@@ -223,7 +302,7 @@ if useTap {
     default: description.muteBehavior = CATapMuteBehavior.mutedWhenTapped
     }
     tapDescription = description
-    print("tap config    : scope \(scope)  exclusive \(description.isExclusive)  private \(description.isPrivate)  mute \(description.muteBehavior.rawValue)  processes \(description.__processes)")
+    print("tap config    : device-bound  exclusive \(description.isExclusive)  private \(description.isPrivate)  mute \(description.muteBehavior.rawValue)  processes \(description.__processes)")
 
     let tapStatus = AudioHardwareCreateProcessTap(description, &tap)
     guard tapStatus == noErr, tap != kAudioObjectUnknown else { fail("AudioHardwareCreateProcessTap", tapStatus) }
@@ -243,11 +322,11 @@ if useTap {
     ]
     let aggregateStatus = AudioHardwareCreateAggregateDevice(aggregateDescription as CFDictionary, &aggregate)
     guard aggregateStatus == noErr, aggregate != kAudioObjectUnknown else {
-        AudioHardwareDestroyProcessTap(tap)
+        teardown()
         fail("AudioHardwareCreateAggregateDevice", aggregateStatus)
     }
     Thread.sleep(forTimeInterval: 0.5)
-    if let requested = options["buffer-frames"], let frames = UInt32(requested) {
+    if let frames = bufferFrames {
         var property = address(kAudioDevicePropertyBufferFrameSize)
         var wanted = frames
         let status = AudioObjectSetPropertyData(aggregate, &property, 0, nil,
@@ -310,7 +389,6 @@ var micCallbacks = 0
 
 // ---------------------------------------------------------------- tap io proc
 
-var tapProcID: AudioDeviceIOProcID?
 if useTap {
     let status = AudioDeviceCreateIOProcIDWithBlock(&tapProcID, aggregate, nil) {
         _, inputData, inputTime, outputData, outputTime in
@@ -362,16 +440,17 @@ if useTap {
         }
         captureFrames = min(captureFrames + framesThisCycle, capacity / 2 - 1)
     }
-    guard status == noErr, tapProcID != nil else { fail("tap AudioDeviceCreateIOProcIDWithBlock", status) }
+    guard status == noErr, tapProcID != nil else {
+        teardown()
+        fail("tap AudioDeviceCreateIOProcIDWithBlock", status)
+    }
 }
 
 // ---------------------------------------------------------------- microphone io proc
 
-var micDevice = AudioObjectID(kAudioObjectUnknown)
-var micProcID: AudioDeviceIOProcID?
 var micSampleRate: Float64 = 48000
 
-if let micUID = options["mic-uid"], let found = device(uid: micUID) {
+if let found = requestedMicDevice {
     micDevice = found
     micSampleRate = value(micDevice, kAudioDevicePropertyNominalSampleRate, default: Float64(48000)) ?? 48000
     print("microphone    : \(stringValue(micDevice, kAudioObjectPropertyName) ?? "?") @ \(micSampleRate) Hz")
@@ -398,18 +477,21 @@ if let micUID = options["mic-uid"], let found = device(uid: micUID) {
         }
         micFrames = min(micFrames + frames, capacity / 2 - 1)
     }
-    if status != noErr { print("microphone    : could not create io proc (\(status))") ; micProcID = nil }
+    guard status == noErr, micProcID != nil else {
+        teardown()
+        fail("microphone AudioDeviceCreateIOProcIDWithBlock", status)
+    }
 }
 
 // ---------------------------------------------------------------- run
 
 if let tapProcID {
     let status = AudioDeviceStart(aggregate, tapProcID)
-    if status != noErr { print("tap start failed \(status)") }
+    guard status == noErr else { teardown(); fail("tap AudioDeviceStart", status) }
 }
 if let micProcID {
     let status = AudioDeviceStart(micDevice, micProcID)
-    if status != noErr { print("mic start failed \(status)") }
+    guard status == noErr else { teardown(); fail("microphone AudioDeviceStart", status) }
 }
 
 var player: Process?
@@ -420,28 +502,22 @@ if options["play"] == "yes" {
                          "--out-uid", outputUID,
                          "--seconds", String(seconds - 1),
                          "--prefix", prefix,
-                         "--noise-level", options["noise-level"] ?? "0.05",
-                         "--click-level", options["click-level"] ?? "0.35"]
-    try? process.run()
+                         "--level-dbfs", levelDBFS]
+    do {
+        try process.run()
+    } catch {
+        teardown()
+        fail("could not start the player: \(error)")
+    }
     player = process
     print("player        : pid \(process.processIdentifier)")
 }
 
-Thread.sleep(forTimeInterval: seconds)
+let deadline = Date().addingTimeInterval(seconds)
+while Date() < deadline, !interrupted { Thread.sleep(forTimeInterval: 0.05) }
+if interrupted, let player, player.isRunning { player.terminate() }
 player?.waitUntilExit()
-
-if let tapProcID {
-    AudioDeviceStop(aggregate, tapProcID)
-    AudioDeviceDestroyIOProcID(aggregate, tapProcID)
-}
-if let micProcID {
-    AudioDeviceStop(micDevice, micProcID)
-    AudioDeviceDestroyIOProcID(micDevice, micProcID)
-}
-if useTap {
-    AudioHardwareDestroyAggregateDevice(aggregate)
-    AudioHardwareDestroyProcessTap(tap)
-}
+teardown()
 
 // ---------------------------------------------------------------- report
 
@@ -472,3 +548,7 @@ print("mic callbacks : \(micCallbacks)  frames \(micFrames)  channels \(micChann
 print(String(format: "mic rms       : %.6f", rootMeanSquare(micCapture[0..<(micFrames * 2)])))
 print("dumps         : \(prefix)-{tapraw,tapproc,mic}.f32")
 print("rates         : output \(sampleRate)  mic \(micSampleRate)")
+
+if interrupted { fail("interrupted") }
+if let player, player.terminationStatus != 0 { fail("player exited with status \(player.terminationStatus)") }
+print("COMPLETED")
