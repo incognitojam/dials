@@ -4,7 +4,7 @@
 #include <string.h>
 
 _Static_assert(ATOMIC_LLONG_LOCK_FREE == 2 && ATOMIC_BOOL_LOCK_FREE == 2, "IO needs lock-free counters");
-struct EQMeter { atomic_ullong cycles; atomic_bool nonfinite; };
+struct EQMeter { atomic_ullong cycles, overloads; atomic_bool nonfinite; };
 EQMeter *EQMeterCreate(void) { return calloc(1, sizeof(EQMeter)); }
 void EQMeterFree(EQMeter *meter) { free(meter); }
 uint64_t EQHeartbeat(EQMeter *meter) { return atomic_load_explicit(&meter->cycles, memory_order_relaxed); }
@@ -52,4 +52,21 @@ bool EQRender(const AudioBufferList *input, AudioBufferList *output, uint32_t fi
         start += count;
     }
     return healthy;
+}
+
+static OSStatus overload(AudioObjectID object, UInt32 count, const AudioObjectPropertyAddress *keys, void *context) {
+    EQMeter *meter = context;
+    atomic_fetch_add_explicit(&meter->overloads, 1, memory_order_relaxed);
+    return noErr;
+}
+
+OSStatus EQObserveOverloads(AudioObjectID device, EQMeter *meter, bool observe) {
+    AudioObjectPropertyAddress key = { kAudioDeviceProcessorOverload, kAudioObjectPropertyScopeGlobal,
+                                       kAudioObjectPropertyElementMain };
+    return observe ? AudioObjectAddPropertyListener(device, &key, overload, meter)
+                   : AudioObjectRemovePropertyListener(device, &key, overload, meter);
+}
+
+uint64_t EQTakeOverloads(EQMeter *meter) {
+    return atomic_exchange_explicit(&meter->overloads, 0, memory_order_relaxed);
 }

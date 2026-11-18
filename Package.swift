@@ -5,7 +5,7 @@ import PackageDescription
 var targets: [Target] = [
     .target(name: "RoutingCore"),
     .target(name: "BrightnessCore"),
-    .target(name: "EqualizerCore"),
+    .target(name: "EqualizerCore", swiftSettings: [.unsafeFlags(["-O"], .when(configuration: .debug))]),
     .target(name: "EqualizerEngineCore", dependencies: ["EqualizerCore", "RoutingCore"]),
     .testTarget(name: "EqualizerEngineCoreTests", dependencies: ["EqualizerEngineCore"]),
     .testTarget(name: "EqualizerCoreTests", dependencies: ["EqualizerCore"]),

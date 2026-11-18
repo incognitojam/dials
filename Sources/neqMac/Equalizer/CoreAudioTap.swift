@@ -38,8 +38,15 @@ final class CoreAudioTap: TapDevice {
     let output: AudioDevice
     private let queue: DispatchQueue
     private let changed: () -> Void
+    private let diagnostic: (String) -> Void
+    private let stillWanted: () -> Bool
+    private var bufferRequest: (rate: Double, frames: UInt32)?
+    private var observingOverloads = false
+    private var overloads: UInt64 = 0
+    private var lastDiagnostics: TimeInterval = 0
     private var ownProcess: AudioObjectID = 0
     private var tap: AudioObjectID = 0
+    private var tapDestroyed = false
     private var aggregate: AudioObjectID = 0
     private var uuid = UUID()
     private var io: AudioDeviceIOProcID?
@@ -47,7 +54,10 @@ final class CoreAudioTap: TapDevice {
     private var observations: [AudioObservation] = []
     private let global = kAudioObjectPropertyScopeGlobal
 
-    init(output: AudioDevice, queue: DispatchQueue, changed: @escaping () -> Void) {
+    init(output: AudioDevice, queue: DispatchQueue, diagnostic: @escaping (String) -> Void = { _ in },
+         stillWanted: @escaping () -> Bool = { true }, changed: @escaping () -> Void) {
+        self.diagnostic = diagnostic
+        self.stillWanted = stillWanted
         self.output = output
         self.queue = queue
         self.changed = changed
@@ -72,6 +82,7 @@ final class CoreAudioTap: TapDevice {
         description.isPrivate = true
         description.muteBehavior = .mutedWhenTapped
         uuid = description.uuid
+        guard stillWanted() else { throw SessionError.superseded }
         try TapError.check(AudioHardwareCreateProcessTap(description, &tap), "Create process tap")
     }
 
@@ -100,6 +111,20 @@ final class CoreAudioTap: TapDevice {
                 observations.append(try AudioObservation(object, selector, scope: scope, queue: queue, change: changed))
             }
         }
+        // HAL publishes the aggregate and its streams separately.
+        for attempt in 0..<10 {
+            do {
+                try configureStreams(profile)
+                return
+            } catch let error as SessionError { throw error }
+            catch {
+                if attempt == 9 { throw error }
+                Thread.sleep(forTimeInterval: 0.025)
+            }
+        }
+    }
+
+    private func configureStreams(_ profile: EQInfo) throws {
         let format: AudioStreamBasicDescription = try CoreAudioClient.readScalar(objectID: tap,
             selector: kAudioTapPropertyFormat, scope: global)
         guard format.mSampleRate >= 32_000 else { throw SessionError.lowRate }
@@ -110,57 +135,114 @@ final class CoreAudioTap: TapDevice {
         let plan = try EqualizerPlan(profile.parameters, sampleRate: format.mSampleRate)
         let inputs: [AudioStreamID] = try CoreAudioClient.readArray(objectID: output.audioObjectID,
             selector: kAudioDevicePropertyStreams, scope: kAudioObjectPropertyScopeInput)
+        let aggregateInputs: [AudioStreamID] = try CoreAudioClient.readArray(objectID: aggregate,
+            selector: kAudioDevicePropertyStreams, scope: kAudioObjectPropertyScopeInput)
+        let aggregateOutputs: [AudioStreamID] = try CoreAudioClient.readArray(objectID: aggregate,
+            selector: kAudioDevicePropertyStreams, scope: kAudioObjectPropertyScopeOutput)
+        guard aggregateInputs.count > inputs.count, !aggregateOutputs.isEmpty else {
+            throw TapError(message: "Aggregate has no tap input or output stream")
+        }
+        for stream in Array(aggregateInputs.dropFirst(inputs.count)) + aggregateOutputs {
+            let virtual: AudioStreamBasicDescription = try CoreAudioClient.readScalar(objectID: stream,
+                selector: kAudioStreamPropertyVirtualFormat, scope: global)
+            guard virtual.mFormatID == kAudioFormatLinearPCM, virtual.mBitsPerChannel == 32,
+                  virtual.mFormatFlags & kAudioFormatFlagIsFloat != 0,
+                  virtual.mFormatFlags & kAudioFormatFlagIsBigEndian == 0 else {
+                throw TapError(message: "Unsupported aggregate stream format")
+            }
+        }
         if let render {
             RenderContext.publish(render, plan: plan, channels: Int(format.mChannelsPerFrame), firstInput: UInt32(inputs.count))
         } else {
             let context = UnsafeMutablePointer<RenderContext>.allocate(capacity: 1)
             context.initialize(to: RenderContext(plan: plan, channels: Int(format.mChannelsPerFrame), firstInput: UInt32(inputs.count)))
+            observingOverloads = EQObserveOverloads(aggregate, context.pointee.meter, true) == noErr
             render = context
         }
         let preferred: UInt32 = 128
         let current: UInt32 = try CoreAudioClient.readScalar(objectID: aggregate, selector: kAudioDevicePropertyBufferFrameSize, scope: global)
-        if current != preferred {
+        if current == preferred { bufferRequest = nil; return }
+        if bufferRequest?.rate == format.mSampleRate, bufferRequest?.frames == current { return }
+        bufferRequest = (format.mSampleRate, current)
+        do {
             try CoreAudioClient.writeScalar(preferred, objectID: aggregate, selector: kAudioDevicePropertyBufferFrameSize, scope: global)
-        }
+        } catch { diagnostic("Could not set the preferred equalizer buffer size: " + error.localizedDescription) }
     }
 
+    @_optimize(speed)
     func createIO() throws {
         try TapError.check(AudioDeviceCreateIOProcID(aggregate, { _, _, input, _, output, _, context in
-            RenderContext.render(context!.assumingMemoryBound(to: RenderContext.self), input: input, output: output)
-            return noErr
+            guard let context else { return -50 }
+            RenderContext.render(context.assumingMemoryBound(to: RenderContext.self), input: input, output: output)
+            return 0
         }, render, &io), "Create IO proc")
     }
 
-    func startIO() throws { try TapError.check(AudioDeviceStart(aggregate, io), "Start aggregate IO") }
-    func destroyTap() { AudioHardwareDestroyProcessTap(tap) }
-    func stopIO() { AudioDeviceStop(aggregate, io) }
+    func startIO() throws {
+        guard stillWanted() else { throw SessionError.superseded }
+        try TapError.check(AudioDeviceStart(aggregate, io), "Start aggregate IO")
+    }
+
+    private func cleaned(_ status: OSStatus, _ step: String) -> Bool {
+        if status == noErr || status == kAudioHardwareBadObjectError { return true }
+        diagnostic("\(step) (OSStatus \(status))")
+        return false
+    }
+
+    func destroyTap() {
+        if tap != 0, !tapDestroyed { tapDestroyed = cleaned(AudioHardwareDestroyProcessTap(tap), "Destroy process tap") }
+    }
+    func stopIO() { _ = cleaned(AudioDeviceStop(aggregate, io), "Stop aggregate IO") }
     func destroyIO() {
-        if let io, AudioDeviceDestroyIOProcID(aggregate, io) == noErr { self.io = nil }
+        if let io, cleaned(AudioDeviceDestroyIOProcID(aggregate, io), "Destroy IO proc") { self.io = nil }
     }
     func destroyAggregate() {
         observations.forEach { $0.cancel() }
         observations.removeAll()
-        let destroyed = AudioHardwareDestroyAggregateDevice(aggregate) == noErr
-        if let render, io == nil || destroyed {
+        if observingOverloads, let render {
+            observingOverloads = !cleaned(EQObserveOverloads(aggregate, render.pointee.meter, false), "Remove overload listener")
+        }
+        let destroyed = cleaned(AudioHardwareDestroyAggregateDevice(aggregate), "Destroy aggregate")
+        if let render, destroyed || (io == nil && !observingOverloads) {
             render.deinitialize(count: 1)
             render.deallocate()
             self.render = nil
         }
     }
 
-    var heartbeat: UInt64 { EQHeartbeat(render!.pointee.meter) }
-    func takeNonfinite() -> Bool { EQTakeNonfinite(render!.pointee.meter) }
+    deinit { destroyTap() }
+
+    var heartbeat: UInt64 {
+        let meter = render!.pointee.meter
+        let now = ProcessInfo.processInfo.systemUptime
+        if now - lastDiagnostics >= 1 {
+            lastDiagnostics = now
+            if EQTakeNonfinite(meter) { diagnostic("Equalizer recovered from non-finite samples") }
+            overloads += EQTakeOverloads(meter)
+            if overloads > 1 {
+                diagnostic("Repeated equalizer IO overloads")
+                overloads = 0
+            }
+        }
+        return EQHeartbeat(meter)
+    }
 
     var removed: Bool {
         let alive: UInt32? = try? CoreAudioClient.readScalar(objectID: output.audioObjectID, selector: kAudioDevicePropertyDeviceIsAlive, scope: global)
-        guard alive == 1 else { return true }
+        if alive == 0 { return true }
+        if alive == nil {
+            let connected: [AudioObjectID]? = try? CoreAudioClient.readArray(objectID: AudioObjectID(kAudioObjectSystemObject),
+                selector: kAudioHardwarePropertyDevices, scope: global)
+            if connected?.contains(output.audioObjectID) == false { return true }
+        }
         var key = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyStreamConfiguration,
             mScope: kAudioObjectPropertyScopeOutput, mElement: kAudioObjectPropertyElementMain)
         var size: UInt32 = 0
-        guard AudioObjectGetPropertyDataSize(aggregate, &key, 0, nil, &size) == noErr, size > 0 else { return true }
+        guard AudioObjectGetPropertyDataSize(aggregate, &key, 0, nil, &size) == noErr else { return false }
+        guard size >= MemoryLayout<UInt32>.size else { return false }
         let storage = UnsafeMutableRawPointer.allocate(byteCount: Int(size), alignment: MemoryLayout<AudioBufferList>.alignment)
         defer { storage.deallocate() }
-        guard AudioObjectGetPropertyData(aggregate, &key, 0, nil, &size, storage) == noErr else { return true }
+        guard AudioObjectGetPropertyData(aggregate, &key, 0, nil, &size, storage) == noErr else { return false }
         let buffers = UnsafeMutableAudioBufferListPointer(storage.assumingMemoryBound(to: AudioBufferList.self))
         return !buffers.contains { $0.mNumberChannels > 0 }
     }

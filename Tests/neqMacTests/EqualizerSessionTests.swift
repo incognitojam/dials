@@ -8,7 +8,11 @@ final class EqualizerSessionTests: XCTestCase {
     final class Backend: TapDevice {
         var calls: [String] = []
         var failure: String?
-        var removed = false
+        var onStop: (() -> Void)?
+        var onConfigure: (() -> Void)?
+        var deviceGone = false
+        var zeroOutputChannels = false
+        var removed: Bool { deviceGone || zeroOutputChannels }
         var otherProcessPlaying = false
         var heartbeat: UInt64 = 0
         func step(_ name: String) throws {
@@ -17,11 +21,11 @@ final class EqualizerSessionTests: XCTestCase {
         }
         func createTap() throws { try step("tap") }
         func createAggregate() throws { try step("aggregate") }
-        func configure(_ profile: EQInfo) throws { try step("configure") }
+        func configure(_ profile: EQInfo) throws { try step("configure"); onConfigure?() }
         func createIO() throws { try step("io") }
         func startIO() throws { try step("start") }
         func destroyTap() { calls.append("unmute") }
-        func stopIO() { calls.append("stop") }
+        func stopIO() { onStop?(); calls.append("stop") }
         func destroyIO() { calls.append("destroyIO") }
         func destroyAggregate() { calls.append("destroyAggregate") }
     }
@@ -62,7 +66,8 @@ final class EqualizerSessionTests: XCTestCase {
             XCTAssertNil(monitor.check(now: 14))
             audio.otherProcessPlaying = true
             XCTAssertNil(monitor.check(now: 20))
-            audio.removed = true
+            audio.deviceGone = notificationFirst
+            audio.zeroOutputChannels = !notificationFirst
             for notification in [notificationFirst, !notificationFirst] {
                 let reason = try XCTUnwrap(monitor.check(now: 20.55, notification: notification))
                 engine.finish(session, reason: reason)
@@ -87,9 +92,39 @@ final class EqualizerSessionTests: XCTestCase {
         other.otherProcessPlaying = true
         XCTAssertNil(session.monitor.check(now: 1))
         let reason = try XCTUnwrap(session.monitor.check(now: 1.36))
+        other.onStop = { XCTAssertEqual(engine.status, .failed("Audio callback stalled")) }
         engine.finish(session, reason: reason)
+        other.onStop = nil
         XCTAssertEqual(engine.status, .failed("Audio callback stalled"))
         XCTAssertEqual(Array(other.calls.suffix(4)), teardown)
+    }
+
+    func testPermissionWaitPrecedesWatchdog() {
+        let entered = expectation(description: "waiting for permission")
+        let running = expectation(description: "running after permission")
+        let allow = DispatchSemaphore(value: 0)
+        let audio = Backend()
+        audio.otherProcessPlaying = true
+        audio.onConfigure = {
+            entered.fulfill()
+            _ = allow.wait(timeout: .now() + 3)
+        }
+        let engine = SessionEngine { status in
+            if status == .running { running.fulfill() }
+            if case .failed = status { XCTFail("Prompt wait armed watchdog") }
+        }
+        let queue = DispatchQueue(label: "test.build")
+        queue.async { [self] in
+            engine.reconcile(desired, output: output) { _ in audio }
+            if let session = engine.session {
+                session.watch(on: queue) { engine.finish($0, reason: $1) }
+                engine.finish(session, reason: .idle)
+            }
+        }
+        wait(for: [entered], timeout: 2)
+        DispatchQueue.global().asyncAfter(deadline: .now() + SessionGuard.callbackTolerance * 2) { allow.signal() }
+        wait(for: [running], timeout: 2)
+        queue.sync { XCTAssertEqual(Array(audio.calls.suffix(4)), teardown) }
     }
 
     func testInactiveSettingsNeverReachTapCreation() throws {

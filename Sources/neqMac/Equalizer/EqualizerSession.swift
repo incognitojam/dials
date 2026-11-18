@@ -23,8 +23,13 @@ protocol TapDevice: AnyObject {
 }
 
 enum SessionError: LocalizedError {
-    case lowRate
-    var errorDescription: String? { "Output rate below 32 kHz" }
+    case lowRate, superseded
+    var errorDescription: String? {
+        switch self {
+        case .lowRate: "Output rate below 32 kHz"
+        case .superseded: "Output or settings changed while starting"
+        }
+    }
 }
 
 // Coordinates the watchdog thread and the serial session queue. Never entered from IO.
@@ -35,7 +40,7 @@ final class SessionGuard {
     private var lastBeat: UInt64?
     private var since: TimeInterval = 0
     private var ended: SessionStatus?
-    private var hasTap = false
+    private(set) var hasTap = false
 
     init(_ device: TapDevice) { self.device = device }
 
@@ -115,12 +120,10 @@ final class EqualizerSession {
 
     func update(profile: EQInfo) throws { try backend.configure(profile) }
 
-    func close(_ reason: SessionStatus) -> SessionStatus {
-        let result = monitor.end(reason)
+    func closeIO() {
         if startAttempted { backend.stopIO(); startAttempted = false }
         if io { backend.destroyIO(); io = false }
         if aggregate { backend.destroyAggregate(); aggregate = false }
-        return result
     }
 }
 
@@ -130,9 +133,14 @@ final class SessionEngine {
     private(set) var status: SessionStatus = .idle
     private var target: AudioDevice?
     private var applied: EQInfo?
-    let report: (SessionStatus) -> Void
+    private var failures: [String: Int] = [:]
+    private let didTearDown: () -> Void
+    private let report: (SessionStatus) -> Void
 
-    init(report: @escaping (SessionStatus) -> Void) { self.report = report }
+    init(didTearDown: @escaping () -> Void = {}, report: @escaping (SessionStatus) -> Void) {
+        self.didTearDown = didTearDown
+        self.report = report
+    }
 
     func reconcile(_ desired: DesiredEqualizer, output: AudioDevice?, retry: Bool = false,
                    formatChanged: Bool = false, make: (AudioDevice) -> TapDevice) {
@@ -151,7 +159,12 @@ final class SessionEngine {
             if let session { finish(session, reason: next) } else { publish(next) }
             return
         }
+        if retry { failures.removeValue(forKey: output.uid) }
         if !changed && !retry, case .failed = status { return }
+        if failures[output.uid, default: 0] >= 2 {
+            publish(.failed("Repeated failures on this output; edit equalizer settings to retry"))
+            return
+        }
         do {
             if let session {
                 if applied != profile || formatChanged {
@@ -176,11 +189,13 @@ final class SessionEngine {
 
     func finish(_ old: EqualizerSession, reason: SessionStatus) {
         guard old === session else { return }
-        let result = old.close(reason)
+        let result = old.monitor.end(reason)
         session = nil
         applied = nil
-        if result != .idle { report(.idle) }
+        if case .failed = result, let target { failures[target.uid, default: 0] += 1 }
         publish(result)
+        old.closeIO()
+        if old.monitor.hasTap { didTearDown() }
     }
 
     private func publish(_ next: SessionStatus) {

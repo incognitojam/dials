@@ -67,6 +67,7 @@ struct RenderContext: ~Copyable {
         p.pointee.pending = PlanChange(plan: plan, mode: .processing, firstInput: firstInput)
     }
 
+    @_optimize(speed)
     static func render(_ p: UnsafeMutablePointer<Self>, input: UnsafePointer<AudioBufferList>,
                        output: UnsafeMutablePointer<AudioBufferList>) {
         if os_unfair_lock_trylock(&p.pointee.lock) {
@@ -84,9 +85,10 @@ struct RenderContext: ~Copyable {
             }
         }
         let bank = p.pointee.active
-        let healthy = EQRender(input, output, p.pointee.firstInput, UInt32(bank.pointee.processor.channels),
+        let healthy = EQRender(input, output, p.pointee.firstInput, UInt32(truncatingIfNeeded: bank.pointee.processor.channels),
                                bank.pointee.scratch, RenderBank.chunk, bank) { pointer, samples, frames in
-            pointer!.assumingMemoryBound(to: RenderBank.self).pointee.processor.process(interleaved: samples!, frames: frames)
+            guard let pointer, let samples else { return false }
+            return pointer.assumingMemoryBound(to: RenderBank.self).pointee.processor.process(interleaved: samples, frames: frames)
         }
         EQDidRender(p.pointee.meter, healthy)
     }
