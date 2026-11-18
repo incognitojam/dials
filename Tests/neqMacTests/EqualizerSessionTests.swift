@@ -1,6 +1,7 @@
 import CoreAudio
 import EqualizerCore
 import EqualizerEngineCore
+import EqualizerIO
 import XCTest
 @testable import neqMac
 
@@ -13,7 +14,8 @@ final class EqualizerSessionTests: XCTestCase {
         var onConfigure: (() -> Void)?
         var deviceGone = false
         var zeroOutputChannels = false
-        var removed: Bool { deviceGone || zeroOutputChannels }
+        var onRemovalRead: (() -> Void)?
+        var removed: Bool { onRemovalRead?(); return deviceGone }
         var otherProcessPlaying = false
         var heartbeat: UInt64 = 0
         func step(_ name: String) throws {
@@ -62,20 +64,23 @@ final class EqualizerSessionTests: XCTestCase {
             let monitor = session.monitor
             XCTAssertNil(monitor.check(now: 0))
             XCTAssertNil(monitor.check(now: 10))
-            audio.otherProcessPlaying = true
+            monitor.setPlaying(true)
             XCTAssertNil(monitor.check(now: 11))
             XCTAssertNil(monitor.check(now: 11.34))
             audio.heartbeat += 1
             XCTAssertNil(monitor.check(now: 11.36))
-            audio.otherProcessPlaying = false
+            monitor.setPlaying(false)
             XCTAssertNil(monitor.check(now: 14))
-            audio.otherProcessPlaying = true
+            monitor.setPlaying(true)
             XCTAssertNil(monitor.check(now: 20))
-            audio.deviceGone = notificationFirst
+            audio.deviceGone = true
             audio.zeroOutputChannels = !notificationFirst
             for notification in [notificationFirst, !notificationFirst] {
-                let reason = try XCTUnwrap(monitor.check(now: 20.55, notification: notification))
-                engine.finish(session, reason: reason)
+                if notification {
+                    if engine.session != nil { engine.reconcile(desired, output: output) { _ in audio } }
+                } else if let reason = monitor.check(now: 20.55) {
+                    engine.finish(session, reason: reason)
+                }
             }
             XCTAssertEqual(engine.status, .suspended("Device removed"))
             XCTAssertEqual(audio.calls.filter { $0 == "unmute" }.count, 1)
@@ -95,7 +100,7 @@ final class EqualizerSessionTests: XCTestCase {
         engine.reconcile(desired, output: next) { _ in other }
         XCTAssertEqual(Array(audio.calls.suffix(4)), teardown)
         let session = try XCTUnwrap(engine.session)
-        other.otherProcessPlaying = true
+        session.monitor.setPlaying(true)
         XCTAssertNil(session.monitor.check(now: 1))
         let reason = try XCTUnwrap(session.monitor.check(now: 1.36))
         other.onStop = { XCTAssertEqual(engine.status, .failed("Audio callback stalled")) }
@@ -120,6 +125,65 @@ final class EqualizerSessionTests: XCTestCase {
         XCTAssertEqual(engine.status, .idle)
         XCTAssertEqual(Array(resumed.calls.suffix(4)), teardown)
         XCTAssertEqual(stops, 2)
+    }
+
+    func testExpiryReleasesMuteBeforeBlockingRemovalQuery() throws {
+        let audio = Backend()
+        let engine = SessionEngine { _ in }
+        engine.reconcile(desired, output: output) { _ in audio }
+        let session = try XCTUnwrap(engine.session)
+        let entered = expectation(description: "removal read")
+        let done = expectation(description: "watchdog finished")
+        let release = DispatchSemaphore(value: 0)
+        audio.onRemovalRead = {
+            entered.fulfill()
+            _ = release.wait(timeout: .now() + 2)
+        }
+        session.monitor.setPlaying(true)
+        XCTAssertNil(session.monitor.check(now: 0))
+        DispatchQueue.global().async {
+            XCTAssertEqual(session.monitor.check(now: 1), .failed("Audio callback stalled"))
+            done.fulfill()
+        }
+        wait(for: [entered], timeout: 1)
+        XCTAssertEqual(audio.calls.last, "unmute")
+        release.signal()
+        wait(for: [done], timeout: 1)
+        engine.finish(session, reason: .idle)
+        XCTAssertEqual(audio.calls.filter { $0 == "unmute" }.count, 1)
+    }
+
+    func testFormatNotificationsResetDeadlineAndRetryWithoutFailure() throws {
+        let audio = Backend()
+        let engine = SessionEngine { _ in }
+        engine.reconcile(desired, output: output) { _ in audio }
+        let session = try XCTUnwrap(engine.session)
+        session.monitor.setPlaying(true)
+        XCTAssertNil(session.monitor.check(now: 0))
+        audio.zeroOutputChannels = true
+        audio.failure = "configure"
+        engine.reconcile(desired, output: output, formatChanged: true) { _ in XCTFail(); return audio }
+        XCTAssertNil(session.monitor.check(now: 0.6))
+        XCTAssertTrue(engine.session === session)
+        audio.zeroOutputChannels = false
+        audio.failure = nil
+        engine.reconcile(desired, output: output, formatChanged: true) { _ in XCTFail(); return audio }
+        XCTAssertEqual(engine.status, .running)
+        audio.failure = "configure"
+        for _ in 0..<3 { engine.reconcile(desired, output: output, formatChanged: true) { _ in audio } }
+        XCTAssertEqual(engine.status, .suspended("Format unavailable after three configuration notifications"))
+        XCTAssertEqual(Array(audio.calls.suffix(4)), teardown)
+    }
+
+    func testUnplugDuringBuildSuspends() {
+        let audio = Backend()
+        audio.onConfigure = { audio.deviceGone = true }
+        audio.failure = "io"
+        let engine = SessionEngine { _ in }
+        engine.reconcile(desired, output: output) { _ in audio }
+        XCTAssertEqual(engine.status, .suspended("Device removed"))
+        XCTAssertEqual(Array(audio.calls.suffix(2)), ["unmute", "destroyAggregate"])
+        audio.onConfigure = nil
     }
 
     func testPermissionWaitPrecedesWatchdog() {
@@ -168,10 +232,10 @@ extension EqualizerSessionTests {
     func testRenderChangesSizeAndChannelCountBetweenCallbacks() throws {
         let plan = try EqualizerPlan(profile.parameters, sampleRate: 48_000)
         let p = UnsafeMutablePointer<RenderContext>.allocate(capacity: 1)
-        p.initialize(to: RenderContext(plan: plan, channels: 2, firstInput: 0))
+        p.initialize(to: RenderContext(plan: plan, channels: 2, layout: EQInputLayout(firstBuffer: 0, bufferCount: 1, totalBuffers: 1, channelsPerBuffer: 2)))
         defer { p.deinitialize(count: 1); p.deallocate() }
         for channels in [2, 1, 6] {
-            RenderContext.publish(p, plan: plan, channels: channels, firstInput: 0)
+            RenderContext.publish(p, plan: plan, channels: channels, layout: EQInputLayout(firstBuffer: 0, bufferCount: 1, totalBuffers: 1, channelsPerBuffer: UInt32(channels)))
             var samples = [Float](repeating: 0.1, count: 513 * channels)
             var result = [Float](repeating: 0, count: samples.count)
             samples.withUnsafeMutableBytes { src in
@@ -181,7 +245,8 @@ extension EqualizerSessionTests {
                     RenderContext.render(p, input: &input, output: &output)
                 }
             }
-            XCTAssertTrue(result.allSatisfy { abs($0 - 0.0501187) < 0.00001 })
+            XCTAssertTrue(result[0] < 0.001)
+            XCTAssertTrue(result.dropFirst(240 * channels).allSatisfy { abs($0 - 0.0501187) < 0.00001 })
         }
     }
 }

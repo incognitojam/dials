@@ -23,9 +23,10 @@ protocol TapDevice: AnyObject {
 }
 
 enum SessionError: LocalizedError {
-    case lowRate, superseded
+    case lowRate, superseded, layout(String)
     var errorDescription: String? {
         switch self {
+        case let .layout(reason): reason
         case .lowRate: "Output rate below 32 kHz"
         case .superseded: "Output or settings changed while starting"
         }
@@ -49,23 +50,35 @@ final class SessionGuard {
         hasTap = true
     }
 
-    func check(now: TimeInterval, notification: Bool = false) -> SessionStatus? {
+    private var playing = false
+
+    func setPlaying(_ value: Bool) {
+        lock.lock()
+        defer { lock.unlock() }
+        if !value { lastBeat = nil }
+        playing = value
+    }
+
+    func formatChanged() {
+        lock.lock()
+        defer { lock.unlock() }
+        lastBeat = nil
+    }
+
+    func check(now: TimeInterval) -> SessionStatus? {
         lock.lock()
         defer { lock.unlock() }
         if let ended { return ended }
-        if device.removed { return finish(.suspended("Device removed")) }
-        guard !notification else { return nil }
-        guard device.otherProcessPlaying else {
-            lastBeat = nil
-            return nil
-        }
         let beat = device.heartbeat
+        guard playing else { return nil }
         if lastBeat != beat {
             since = now
             lastBeat = beat
         }
         guard now - since >= Self.callbackTolerance else { return nil }
-        return finish(device.removed ? .suspended("Device removed") : .failed("Audio callback stalled"))
+        device.destroyTap()
+        ended = device.removed ? .suspended("Device removed") : .failed("Audio callback stalled")
+        return ended
     }
 
     func end(_ status: SessionStatus) -> SessionStatus {
@@ -86,25 +99,41 @@ final class EqualizerSession {
     let monitor: SessionGuard
     private var aggregate = false
     private var io = false
+    private var activityPoll: DispatchSourceTimer?
     private var startAttempted = false
+    var removed: Bool { backend.removed }
 
     init(_ backend: TapDevice) {
         self.backend = backend
         monitor = SessionGuard(backend)
     }
 
-    func start(profile: EQInfo, plan: EqualizerPlan) throws {
-        try monitor.createTap()
-        try backend.createAggregate()
+    func start(profile: EQInfo, plan: EqualizerPlan, diagnostic: (String) -> Void) throws {
+        func timed(_ name: String, _ work: () throws -> Void) rethrows {
+            let start = DispatchTime.now().uptimeNanoseconds
+            defer {
+                let ms = Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000
+                diagnostic(String(format: "%@: %.2f ms", name, ms))
+            }
+            try work()
+        }
+        try timed("Create tap", monitor.createTap)
+        try timed("Create aggregate", backend.createAggregate)
         aggregate = true
-        try backend.configure(profile, plan: plan)
-        try backend.createIO()
+        try timed("Configure aggregate") { try backend.configure(profile, plan: plan) }
+        try timed("Create IO proc", backend.createIO)
         io = true
         startAttempted = true
-        try backend.startIO()
+        try timed("Start IO", backend.startIO)
     }
 
     func watch(on queue: DispatchQueue, ended: @escaping (EqualizerSession, SessionStatus) -> Void) {
+        // HAL queries can wait behind IO. Keep them off the heartbeat thread and outside its lock.
+        let poll = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "dev.neqmac.equalizer.activity"))
+        poll.setEventHandler { [backend, monitor] in monitor.setPlaying(backend.otherProcessPlaying) }
+        poll.schedule(deadline: .now(), repeating: .milliseconds(50))
+        activityPoll = poll
+        poll.resume()
         Thread.detachNewThread { [self] in
             Thread.current.name = "neqMac equalizer watchdog"
             while true {
@@ -121,6 +150,8 @@ final class EqualizerSession {
     func update(profile: EQInfo, plan: EqualizerPlan) throws { try backend.configure(profile, plan: plan) }
 
     func closeIO() {
+        activityPoll?.cancel()
+        activityPoll = nil
         if startAttempted { backend.stopIO(); startAttempted = false }
         if io { backend.destroyIO(); io = false }
         if aggregate { backend.destroyAggregate(); aggregate = false }
@@ -134,18 +165,23 @@ final class SessionEngine {
     private var target: AudioDevice?
     private var applied: EQInfo?
     private var appliedRate: Double?
+    private var formatRetries = 0
+    private var requiresEdit = false
+    private let diagnostic: (String) -> Void
     private var failures: [String: Int] = [:]
     private let didTearDown: () -> Void
     private let report: (SessionStatus) -> Void
 
-    init(didTearDown: @escaping () -> Void = {}, report: @escaping (SessionStatus) -> Void) {
+    init(diagnostic: @escaping (String) -> Void = { _ in }, didTearDown: @escaping () -> Void = {}, report: @escaping (SessionStatus) -> Void) {
+        self.diagnostic = diagnostic
         self.didTearDown = didTearDown
         self.report = report
     }
 
     func reconcile(_ desired: DesiredEqualizer, output: AudioDevice?, retry: Bool = false,
                    formatChanged: Bool = false, make: (AudioDevice) -> TapDevice) {
-        if let session, session.monitor.check(now: 0, notification: true) != nil {
+        if formatChanged { session?.monitor.formatChanged() }
+        if let session, session.removed {
             finish(session, reason: .suspended("Device removed"))
             if output == target || output == nil { target = output; return }
         }
@@ -153,6 +189,7 @@ final class SessionEngine {
         if changed {
             if let session { finish(session, reason: .idle) }
             target = output
+            requiresEdit = false
         }
         guard case let .process(profile, plan) = desired, let output else {
             let next: SessionStatus
@@ -160,7 +197,8 @@ final class SessionEngine {
             if let session { finish(session, reason: next) } else { publish(next) }
             return
         }
-        if retry { failures.removeValue(forKey: output.uid) }
+        if retry { failures.removeValue(forKey: output.uid); requiresEdit = false }
+        if requiresEdit { return }
         if !changed && !retry, case .failed = status { return }
         if failures[output.uid, default: 0] >= 2 {
             publish(.failed("Repeated failures on this output; edit equalizer settings to retry"))
@@ -170,20 +208,35 @@ final class SessionEngine {
             if let session {
                 if applied != profile || appliedRate != plan.sampleRate || formatChanged {
                     try session.update(profile: profile, plan: plan)
+                    formatRetries = 0
                     report(.running)
                 }
             } else {
                 publish(.starting)
                 let new = EqualizerSession(make(output))
                 session = new
-                try new.start(profile: profile, plan: plan)
+                try new.start(profile: profile, plan: plan, diagnostic: diagnostic)
                 publish(.running)
             }
             applied = profile
             appliedRate = plan.sampleRate
         } catch {
             if let session {
-                let next: SessionStatus = error is SessionError ? .suspended(error.localizedDescription) : .failed(error.localizedDescription)
+                let next: SessionStatus
+                if session.removed {
+                    next = .suspended("Device removed")
+                } else if let error = error as? SessionError {
+                    if case .layout = error { requiresEdit = true }
+                    next = .suspended(error.localizedDescription)
+                } else if formatChanged && status == .running {
+                    formatRetries += 1
+                    if formatRetries < 3 {
+                        diagnostic("Format unavailable; waiting for configuration notification (\(formatRetries)/3)")
+                        return
+                    }
+                    requiresEdit = true
+                    next = .suspended("Format unavailable after three configuration notifications")
+                } else { next = .failed(error.localizedDescription) }
                 finish(session, reason: next)
             }
         }
@@ -195,6 +248,7 @@ final class SessionEngine {
         session = nil
         applied = nil
         appliedRate = nil
+        formatRetries = 0
         if case .failed = result, let target { failures[target.uid, default: 0] += 1 }
         publish(result)
         old.closeIO()

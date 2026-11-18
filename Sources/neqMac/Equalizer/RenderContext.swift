@@ -9,6 +9,7 @@ private struct RenderBank: ~Copyable {
 
     init(plan: EqualizerPlan, channels: Int) {
         processor = EqualizerProcessor(plan: plan, channels: channels)
+        processor.reset()
         scratch = .allocate(capacity: channels * Int(Self.chunk))
     }
     deinit { scratch.deallocate() }
@@ -17,7 +18,7 @@ private struct RenderBank: ~Copyable {
 private struct PlanChange {
     let plan: EqualizerPlan
     let mode: EqualizerProcessor.Mode
-    let firstInput: UInt32
+    let layout: EQInputLayout
 }
 
 struct RenderContext: ~Copyable {
@@ -27,12 +28,12 @@ struct RenderContext: ~Copyable {
     private var retired: UnsafeMutablePointer<RenderBank>?
     private var active: UnsafeMutablePointer<RenderBank>
     private var configuredChannels: Int
-    private var firstInput: UInt32
+    private var layout: EQInputLayout
     let meter = EQMeterCreate()!
 
-    init(plan: EqualizerPlan, channels: Int, firstInput: UInt32) {
+    init(plan: EqualizerPlan, channels: Int, layout: EQInputLayout) {
         configuredChannels = channels
-        self.firstInput = firstInput
+        self.layout = layout
         active = .allocate(capacity: 1)
         active.initialize(to: RenderBank(plan: plan, channels: channels))
     }
@@ -46,7 +47,7 @@ struct RenderContext: ~Copyable {
     }
 
     // Use field pointers so publisher and callback never open overlapping Swift accesses to self.
-    static func publish(_ p: UnsafeMutablePointer<Self>, plan: EqualizerPlan, channels: Int, firstInput: UInt32) {
+    static func publish(_ p: UnsafeMutablePointer<Self>, plan: EqualizerPlan, channels: Int, layout: EQInputLayout) {
         os_unfair_lock_lock(&p.pointee.lock)
         defer { os_unfair_lock_unlock(&p.pointee.lock) }
         if let old = p.pointee.retired {
@@ -64,7 +65,7 @@ struct RenderContext: ~Copyable {
             p.pointee.replacement = bank
             p.pointee.configuredChannels = channels
         }
-        p.pointee.pending = PlanChange(plan: plan, mode: .processing, firstInput: firstInput)
+        p.pointee.pending = PlanChange(plan: plan, mode: .processing, layout: layout)
     }
 
     @_optimize(speed)
@@ -80,16 +81,16 @@ struct RenderContext: ~Copyable {
             }
             os_unfair_lock_unlock(&p.pointee.lock)
             if let change {
-                p.pointee.firstInput = change.firstInput
+                p.pointee.layout = change.layout
                 p.pointee.active.pointee.processor.update(to: change.plan, mode: change.mode)
             }
         }
         let bank = p.pointee.active
-        let healthy = EQRender(input, output, p.pointee.firstInput, UInt32(truncatingIfNeeded: bank.pointee.processor.channels),
+        let result = EQRender(input, output, p.pointee.layout, UInt32(truncatingIfNeeded: bank.pointee.processor.channels),
                                bank.pointee.scratch, RenderBank.chunk, bank) { pointer, samples, frames in
             guard let pointer, let samples else { return false }
             return pointer.assumingMemoryBound(to: RenderBank.self).pointee.processor.process(interleaved: samples, frames: frames)
         }
-        EQDidRender(p.pointee.meter, healthy)
+        if result != EQLayoutMismatch { EQDidRender(p.pointee.meter, result == EQRendered) }
     }
 }
