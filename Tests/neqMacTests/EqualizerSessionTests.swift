@@ -7,6 +7,7 @@ import XCTest
 final class EqualizerSessionTests: XCTestCase {
     final class Backend: TapDevice {
         var calls: [String] = []
+        var rates: [Double] = []
         var failure: String?
         var onStop: (() -> Void)?
         var onConfigure: (() -> Void)?
@@ -21,7 +22,11 @@ final class EqualizerSessionTests: XCTestCase {
         }
         func createTap() throws { try step("tap") }
         func createAggregate() throws { try step("aggregate") }
-        func configure(_ profile: EQInfo) throws { try step("configure"); onConfigure?() }
+        func configure(_ profile: EQInfo, plan: EqualizerPlan) throws {
+            try step("configure")
+            rates.append(plan.sampleRate)
+            onConfigure?()
+        }
         func createIO() throws { try step("io") }
         func startIO() throws { try step("start") }
         func destroyTap() { calls.append("unmute") }
@@ -84,6 +89,7 @@ final class EqualizerSessionTests: XCTestCase {
         engine.reconcile(desired, output: output) { _ in audio }
         engine.reconcile(.process(profile, try EqualizerPlan(profile.parameters, sampleRate: 96_000)), output: output, formatChanged: true) { _ in XCTFail(); return audio }
         XCTAssertEqual(audio.calls, ["tap","aggregate","configure","io","start","configure"])
+        XCTAssertEqual(audio.rates, [48_000, 96_000])
         let next = AudioDevice(audioObjectID: 102, uid: "second", name: "Second DAC", direction: .output, transportType: kAudioDeviceTransportTypeUSB)
         let other = Backend()
         engine.reconcile(desired, output: next) { _ in other }
@@ -97,6 +103,23 @@ final class EqualizerSessionTests: XCTestCase {
         other.onStop = nil
         XCTAssertEqual(engine.status, .failed("Audio callback stalled"))
         XCTAssertEqual(Array(other.calls.suffix(4)), teardown)
+    }
+
+    func testLowRateSuspendsAndSwitchingOffReleasesTheResumedSession() {
+        var stops = 0
+        let engine = SessionEngine(didTearDown: { stops += 1 }) { _ in }
+        let audio = Backend()
+        engine.reconcile(desired, output: output) { _ in audio }
+        engine.reconcile(.suspended("Output rate below 32 kHz"), output: output) { _ in XCTFail(); return audio }
+        XCTAssertEqual(engine.status, .suspended("Output rate below 32 kHz"))
+        XCTAssertEqual(Array(audio.calls.suffix(4)), teardown)
+        let resumed = Backend()
+        engine.reconcile(desired, output: output) { _ in resumed }
+        XCTAssertEqual(engine.status, .running)
+        engine.reconcile(.off, output: output) { _ in XCTFail(); return resumed }
+        XCTAssertEqual(engine.status, .idle)
+        XCTAssertEqual(Array(resumed.calls.suffix(4)), teardown)
+        XCTAssertEqual(stops, 2)
     }
 
     func testPermissionWaitPrecedesWatchdog() {

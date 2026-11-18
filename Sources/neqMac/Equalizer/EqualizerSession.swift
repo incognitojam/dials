@@ -9,7 +9,7 @@ enum SessionStatus: Equatable {
 protocol TapDevice: AnyObject {
     func createTap() throws
     func createAggregate() throws
-    func configure(_ profile: EQInfo) throws
+    func configure(_ profile: EQInfo, plan: EqualizerPlan) throws
     func createIO() throws
     func startIO() throws
     func destroyTap()
@@ -93,11 +93,11 @@ final class EqualizerSession {
         monitor = SessionGuard(backend)
     }
 
-    func start(profile: EQInfo) throws {
+    func start(profile: EQInfo, plan: EqualizerPlan) throws {
         try monitor.createTap()
         try backend.createAggregate()
         aggregate = true
-        try backend.configure(profile)
+        try backend.configure(profile, plan: plan)
         try backend.createIO()
         io = true
         startAttempted = true
@@ -118,7 +118,7 @@ final class EqualizerSession {
         }
     }
 
-    func update(profile: EQInfo) throws { try backend.configure(profile) }
+    func update(profile: EQInfo, plan: EqualizerPlan) throws { try backend.configure(profile, plan: plan) }
 
     func closeIO() {
         if startAttempted { backend.stopIO(); startAttempted = false }
@@ -133,6 +133,7 @@ final class SessionEngine {
     private(set) var status: SessionStatus = .idle
     private var target: AudioDevice?
     private var applied: EQInfo?
+    private var appliedRate: Double?
     private var failures: [String: Int] = [:]
     private let didTearDown: () -> Void
     private let report: (SessionStatus) -> Void
@@ -153,7 +154,7 @@ final class SessionEngine {
             if let session { finish(session, reason: .idle) }
             target = output
         }
-        guard case let .process(profile, _) = desired, let output else {
+        guard case let .process(profile, plan) = desired, let output else {
             let next: SessionStatus
             if case let .suspended(reason) = desired { next = .suspended(reason) } else { next = .idle }
             if let session { finish(session, reason: next) } else { publish(next) }
@@ -167,18 +168,19 @@ final class SessionEngine {
         }
         do {
             if let session {
-                if applied != profile || formatChanged {
-                    try session.update(profile: profile)
+                if applied != profile || appliedRate != plan.sampleRate || formatChanged {
+                    try session.update(profile: profile, plan: plan)
                     report(.running)
                 }
             } else {
                 publish(.starting)
                 let new = EqualizerSession(make(output))
                 session = new
-                try new.start(profile: profile)
+                try new.start(profile: profile, plan: plan)
                 publish(.running)
             }
             applied = profile
+            appliedRate = plan.sampleRate
         } catch {
             if let session {
                 let next: SessionStatus = error is SessionError ? .suspended(error.localizedDescription) : .failed(error.localizedDescription)
@@ -192,6 +194,7 @@ final class SessionEngine {
         let result = old.monitor.end(reason)
         session = nil
         applied = nil
+        appliedRate = nil
         if case .failed = result, let target { failures[target.uid, default: 0] += 1 }
         publish(result)
         old.closeIO()

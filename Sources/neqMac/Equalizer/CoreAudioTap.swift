@@ -98,7 +98,7 @@ final class CoreAudioTap: TapDevice {
         try TapError.check(AudioHardwareCreateAggregateDevice(spec as CFDictionary, &aggregate), "Create aggregate")
     }
 
-    func configure(_ profile: EQInfo) throws {
+    func configure(_ profile: EQInfo, plan: EqualizerPlan) throws {
         if observations.isEmpty {
             for (object, selector, scope) in [
                 (tap, kAudioTapPropertyFormat, global),
@@ -114,7 +114,7 @@ final class CoreAudioTap: TapDevice {
         // HAL publishes the aggregate and its streams separately.
         for attempt in 0..<10 {
             do {
-                try configureStreams(profile)
+                try configureStreams(profile, proposed: plan)
                 return
             } catch let error as SessionError { throw error }
             catch {
@@ -124,7 +124,7 @@ final class CoreAudioTap: TapDevice {
         }
     }
 
-    private func configureStreams(_ profile: EQInfo) throws {
+    private func configureStreams(_ profile: EQInfo, proposed: EqualizerPlan) throws {
         let format: AudioStreamBasicDescription = try CoreAudioClient.readScalar(objectID: tap,
             selector: kAudioTapPropertyFormat, scope: global)
         guard format.mSampleRate >= 32_000 else { throw SessionError.lowRate }
@@ -132,7 +132,7 @@ final class CoreAudioTap: TapDevice {
               format.mBitsPerChannel == 32, format.mChannelsPerFrame > 0 else {
             throw TapError(message: "Unsupported tap format")
         }
-        let plan = try EqualizerPlan(profile.parameters, sampleRate: format.mSampleRate)
+        let plan = proposed.sampleRate == format.mSampleRate ? proposed : try EqualizerPlan(profile.parameters, sampleRate: format.mSampleRate)
         let inputs: [AudioStreamID] = try CoreAudioClient.readArray(objectID: output.audioObjectID,
             selector: kAudioDevicePropertyStreams, scope: kAudioObjectPropertyScopeInput)
         let aggregateInputs: [AudioStreamID] = try CoreAudioClient.readArray(objectID: aggregate,
