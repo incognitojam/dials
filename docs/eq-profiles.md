@@ -107,8 +107,9 @@ For a thumbnail, `EqualizerPlan.thumbnail(profile)` defaults to 48 kHz.
 infinity at filter zeros and NaN outside DC through Nyquist. The level-matched dry
 gain is the square root of the mean squared magnitude, including preamp, at the
 midpoints of 256 equal logarithmic intervals from 20 Hz to the lower of 20 kHz and
-Nyquist. This estimates the output RMS for pink noise. The loudness of a particular
-recording also depends on its spectrum.
+Nyquist. Each bin is weighted by the power response of the two BS.1770 K-weighting
+stages. This estimates the change in perceived level for pink noise while giving
+sub-bass less weight. A recording’s spectrum can change the result.
 
 ## Variants are products, not settings
 

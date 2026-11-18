@@ -51,6 +51,16 @@ extension BiquadCoefficients {
         }
     }
 
+    // ITU-R BS.1770-5 Annex 1, tables 1 and 2. Evaluate the reference at physical Hz.
+    fileprivate static func kWeightPower(at frequency: Double) -> Double {
+        let shelf = Self(b0: 1.53512485958697, b1: -2.69169618940638, b2: 1.19839281085285,
+                         a1: -1.69065929318241, a2: 0.73248077421585)
+        let highPass = Self(b0: 1, b1: -2, b2: 1, a1: -1.99004745483398, a2: 0.99007225036621)
+        let angle = 2 * Double.pi * frequency / 48_000
+        let c = cos(angle), s = sin(angle)
+        return pow(10, (shelf.magnitudeDB(cosine: c, sine: s) + highPass.magnitudeDB(cosine: c, sine: s)) / 10)
+    }
+
     fileprivate func magnitudeDB(cosine: Double, sine: Double) -> Double {
         // Rotate H by one sample: z*b0 + b1 + z^-1*b2.
         let n = hypot((b0 + b2) * cosine + b1, (b0 - b2) * sine)
@@ -140,12 +150,14 @@ package struct EqualizerPlan: Sendable, BitwiseCopyable {
             let upper = min(20_000, sampleRate / 2)
             let lower = min(20, upper / 2)
             let bins = 256
-            var power = 0.0
+            var power = 0.0, weightSum = 0.0
             for bin in 0..<bins {
                 let frequency = lower * pow(upper / lower, (Double(bin) + 0.5) / Double(bins))
-                power += pow(10, magnitudeDB(at: frequency) / 10)
+                let weight = BiquadCoefficients.kWeightPower(at: frequency)
+                weightSum += weight
+                power += weight * pow(10, magnitudeDB(at: frequency) / 10)
             }
-            compareGain = sqrt(power / Double(bins))
+            compareGain = sqrt(power / weightSum)
             guard compareGain.isFinite else { throw Invalid.compareGain }
         }
         droppedBandIndices = dropped

@@ -82,16 +82,17 @@ final class DesignTests: XCTestCase {
         }
     }
 
-    func testCompareGainMatchesPinkNoisePower() throws {
-        let p = try plan([Band(.lowShelf, frequency: 600, gainDB: 10, q: 0.7),
-                          Band(.peakDip, frequency: 7000, gainDB: -8, q: 12)], gain: -6)
-        let bins = 8192
-        let meanPower = (0..<bins).reduce(0.0) { total, bin in
-            let f = 20 * pow(1000.0, (Double(bin) + 0.5) / Double(bins))
-            return total + pow(10, p.magnitudeDB(at: f) / 10) / Double(bins)
+    func testCompareGainOnPinkAndMusicLikeSpectra() throws {
+        let bands = try [Band(.lowShelf, frequency: 600, gainDB: 10, q: 0.7),
+                         Band(.peakDip, frequency: 7000, gainDB: -8, q: 12)]
+        // Independent 8192-bin integration. Music-like PSD is flat below 150 Hz,
+        // then falls as 1/f to 2 kHz and as 1/f^1.5 above it.
+        for (rate, pink, music) in [(44100.0, -1.482126, -1.131207),
+                                    (48000, -1.483709, -1.132289), (96000, -1.490479, -1.136881)] {
+            let gainDB = try 20 * log10(plan(bands, gain: -6, rate: rate).compareGain)
+            XCTAssertEqual(gainDB, pink, accuracy: 0.002)
+            XCTAssertEqual(gainDB, music, accuracy: 0.4)
         }
-        XCTAssertEqual(20 * log10(p.compareGain), 10 * log10(meanPower), accuracy: 0.002)
-        XCTAssertGreaterThan(p.compareGain, p.preampGain * 2)
     }
 
     func testDesignAtAndAboveNyquist() throws {
