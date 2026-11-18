@@ -1,5 +1,6 @@
 import AppKit
 import DialsKit
+import RoutingCore
 import SwiftUI
 
 struct MenuBarContentView: View {

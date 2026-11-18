@@ -1,5 +1,6 @@
 import CoreAudio
 import Foundation
+import RoutingCore
 
 enum CoreAudioError: LocalizedError {
     case propertyRead(selector: AudioObjectPropertySelector, status: OSStatus)
@@ -71,7 +72,7 @@ final class CoreAudioClient: AudioDeviceClient {
                 objectID: id,
                 selector: kAudioObjectPropertyName,
                 scope: kAudioObjectPropertyScopeGlobal
-            )) ?? AudioDevice.unknownName
+            )) ?? unknownDeviceName
             // Constrain the generic read inside try? so its storage is UInt32, not Optional<UInt32>.
             let transport = (try? readScalar(
                 objectID: id,

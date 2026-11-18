@@ -1,5 +1,5 @@
 import XCTest
-@testable import nitMac
+@testable import BrightnessCore
 
 final class BrightnessStepTests: XCTestCase {
     func testStopsSpanTheWholeRangeInSixteenSteps() {

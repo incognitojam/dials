@@ -1,12 +1,12 @@
 import Foundation
 
-enum RuleMerging {
+package enum RuleMerging {
     /// Updates rules for devices already known and inserts rules for new ones.
-    static func merged(existing: [DeviceRule], discovered: [AudioDevice]) -> [DeviceRule] {
+    package static func merged(existing: [DeviceRule], discovered: [any RoutingDevice]) -> [DeviceRule] {
         var rules = existing
         for device in discovered {
             if let index = rules.firstIndex(where: { $0.matches(device) }) {
-                if device.name != AudioDevice.unknownName {
+                if device.name != unknownDeviceName {
                     rules[index].name = device.name
                 }
                 rules[index].transportLabel = device.transportLabel
@@ -41,27 +41,23 @@ enum RuleMerging {
         return uniqueRules
     }
 
-    static func restoringKnownNames(in discovered: [AudioDevice], from rules: [DeviceRule]) -> [AudioDevice] {
+    package static func restoringKnownNames<Device: RoutingDevice>(in discovered: [Device], from rules: [DeviceRule]) -> [Device] {
         discovered.map { device in
-            guard device.name == AudioDevice.unknownName,
+            guard device.name == unknownDeviceName,
                   let knownRule = knownRule(for: device.uid, in: rules) else {
                 return device
             }
-            return AudioDevice(
-                audioObjectID: device.audioObjectID,
-                uid: device.uid,
-                name: knownRule.name,
-                direction: device.direction,
-                transportType: device.transportType
-            )
+            var restored = device
+            restored.name = knownRule.name
+            return restored
         }
     }
 
     private static func knownRule(for uid: String, in rules: [DeviceRule]) -> DeviceRule? {
         rules.first {
-            $0.uid == uid && $0.name != AudioDevice.unknownName
+            $0.uid == uid && $0.name != unknownDeviceName
         } ?? rules.first {
-            physicalUID($0.uid) == physicalUID(uid) && $0.name != AudioDevice.unknownName
+            physicalUID($0.uid) == physicalUID(uid) && $0.name != unknownDeviceName
         }
     }
 

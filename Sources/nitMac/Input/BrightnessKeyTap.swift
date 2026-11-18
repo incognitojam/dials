@@ -1,4 +1,5 @@
 import AppKit
+import BrightnessCore
 import CoreGraphics
 
 /// Intercepts the physical brightness keys so they control external displays

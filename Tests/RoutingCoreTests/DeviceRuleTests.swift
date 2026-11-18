@@ -1,5 +1,5 @@
 import XCTest
-@testable import neqMac
+@testable import RoutingCore
 
 final class DeviceRuleTests: XCTestCase {
     func testDisplayTransportRecoversGenericLabelsFromUID() {

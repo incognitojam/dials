@@ -1,6 +1,6 @@
 import Foundation
 
-enum BrightnessDirection {
+package enum BrightnessDirection {
     case up
     case down
 }
@@ -10,14 +10,14 @@ enum BrightnessDirection {
 ///
 /// A press finds the next stop past wherever the display actually sits, so a value
 /// set from System Settings or another app is joined rather than jumped from.
-enum BrightnessStep {
+package enum BrightnessStep {
     static let divisions = 16
 
     static let stops: [Int] = (0...divisions).map {
         Int((Double($0) * 100 / Double(divisions)).rounded())
     }
 
-    static func next(percent: Int, direction: BrightnessDirection, fine: Bool) -> Int {
+    package static func next(percent: Int, direction: BrightnessDirection, fine: Bool) -> Int {
         let value = clamp(percent)
 
         // Shift-option is the same fine-adjustment gesture macOS uses for its own

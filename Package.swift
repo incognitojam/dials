@@ -2,45 +2,32 @@
 
 import PackageDescription
 
+var targets: [Target] = [
+    .target(name: "RoutingCore"),
+    .target(name: "BrightnessCore"),
+    .testTarget(name: "RoutingCoreTests", dependencies: ["RoutingCore"]),
+    .testTarget(name: "BrightnessCoreTests", dependencies: ["BrightnessCore"])
+]
+var products: [Product] = []
+
+#if os(macOS)
+products += [
+    .executable(name: "neqMac", targets: ["neqMac"]),
+    .executable(name: "nitMac", targets: ["nitMac"])
+]
+targets += [
+    .target(name: "DialsKit"),
+    .executableTarget(name: "neqMac", dependencies: ["DialsKit", "RoutingCore"]),
+    .executableTarget(name: "nitMac", dependencies: ["DialsKit", "BrightnessCore"]),
+    .testTarget(name: "DialsKitTests", dependencies: ["DialsKit"]),
+    .testTarget(name: "neqMacTests", dependencies: ["neqMac", "RoutingCore"])
+]
+#endif
+
 let package = Package(
     name: "dials",
-    platforms: [
-        .macOS(.v14)
-    ],
-    products: [
-        .executable(name: "neqMac", targets: ["neqMac"]),
-        .executable(name: "nitMac", targets: ["nitMac"])
-    ],
-    targets: [
-        .target(
-            name: "DialsKit",
-            path: "Sources/DialsKit"
-        ),
-        .executableTarget(
-            name: "neqMac",
-            dependencies: ["DialsKit"],
-            path: "Sources/neqMac"
-        ),
-        .executableTarget(
-            name: "nitMac",
-            dependencies: ["DialsKit"],
-            path: "Sources/nitMac"
-        ),
-        .testTarget(
-            name: "DialsKitTests",
-            dependencies: ["DialsKit"],
-            path: "Tests/DialsKitTests"
-        ),
-        .testTarget(
-            name: "neqMacTests",
-            dependencies: ["neqMac"],
-            path: "Tests/neqMacTests"
-        ),
-        .testTarget(
-            name: "nitMacTests",
-            dependencies: ["nitMac"],
-            path: "Tests/nitMacTests"
-        )
-    ],
+    platforms: [.macOS(.v14)],
+    products: products,
+    targets: targets,
     swiftLanguageModes: [.v5]
 )

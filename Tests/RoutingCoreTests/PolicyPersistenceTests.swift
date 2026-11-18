@@ -1,5 +1,5 @@
 import XCTest
-@testable import neqMac
+@testable import RoutingCore
 
 final class PolicyPersistenceTests: XCTestCase {
     func testPolicyRoundTripsThroughUserDefaults() throws {

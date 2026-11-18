@@ -1,4 +1,5 @@
 import AppKit
+import BrightnessCore
 import Combine
 
 @MainActor
