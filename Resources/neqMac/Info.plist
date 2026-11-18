@@ -26,6 +26,10 @@
     <true/>
     <key>NSHighResolutionCapable</key>
     <true/>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Apply the equalizer you enabled for this output device.</string>
+    <key>NSAudioCaptureUsageDescription</key>
+    <string>Process system playback with the equalizer profile assigned to this output.</string>
     <key>NSPrincipalClass</key>
     <string>NSApplication</string>
 </dict>

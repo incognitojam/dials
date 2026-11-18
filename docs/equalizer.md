@@ -14,12 +14,11 @@ acoustic check. **Provisional** is a working assumption that a named experiment 
 [Hardware experiments](#hardware-experiments) will confirm or replace; build it so it
 can change.
 
-Only the first piece exists. `EqualizerCore` decodes and imports profiles, designs the
-filters and renders them in real time, as described in
-[How curves are computed](eq-profiles.md#how-curves-are-computed) and
-[Rendering a profile](eq-profiles.md#rendering-a-profile). Nothing in the app uses it
-yet: there is no tap, no settings file and no interface. Everything below that is not
-`EqualizerCore` is a plan.
+The filter library and USB session engine are implemented. Enable an output with a
+copied profile in the [equalizer settings file](equalizer-settings.md) and inspect
+Activity for session status. The profile browser, editor, compare control and headset
+integration are planned. Filter design and rendering are described in
+[Equalizer profiles](eq-profiles.md).
 
 ## How the pieces fit
 
@@ -227,8 +226,8 @@ A device with more than two channels gets the same chain on every channel.
 ### Lifecycle
 
 A session is built on its own serial queue, never on the main thread, because
-[an unanswered permission prompt can block `AudioDeviceStart`](audio-taps.md#two-things-not-to-repeat)
-indefinitely (measured). Building it:
+[a permission prompt can hold up construction](audio-taps.md#two-things-not-to-repeat).
+The measured 41.5 s wait occurred before `AudioDeviceStart`. Building it:
 
 1. Translate neqMac's process ID to a Core Audio process object, retrying, since this
    fails transiently just after launch (measured; the retry budget is provisional).

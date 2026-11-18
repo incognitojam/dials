@@ -1,0 +1,55 @@
+# USB output equalizer
+
+On macOS 14.2 or later, neqMac can apply a copied OPRA profile to the current USB output.
+Create `~/Library/Application Support/neqMac/equalizer.json` and replace the example UID
+with the output UID from your routing rule. Keep this file private. The first matching
+assignment in file order wins. Matching uses the routing rules for exact UIDs, serial-less
+USB devices moved between ports, and named AirPlay devices. Only USB outputs are eligible.
+
+```json
+{
+  "enabled": true,
+  "assignments": [
+    {
+      "uid": "AppleUSBAudioEngine:Example:Test DAC:SERIAL0A:1",
+      "name": "Test DAC",
+      "transport": "USB",
+      "choice": "profile",
+      "enabled": true,
+      "profile": {
+        "type": "parametric_eq",
+        "author": "Example",
+        "details": "Synthetic listening check",
+        "parameters": {
+          "gain_db": -12,
+          "bands": [
+            { "type": "low_pass", "frequency": 1000, "slope": 12 }
+          ]
+        }
+      }
+    }
+  ]
+}
+```
+
+Both enabled switches default to false. The assignment list defaults to empty. Each
+assignment needs a nonempty UID and a choice. Name and transport default to empty strings.
+Use `"choice": "none"` and omit `profile` to record an explicit “No equalizer”. Remove the
+assignment to leave the output unassigned. For a profile, copy the complete OPRA
+`eq_info`, including its author and any measurement details, product ID and source link.
+Unknown fields are ignored. A malformed assignment disables the whole file and appears in
+Activity. neqMac only reads the file. Saving, replacing or deleting it takes effect live.
+
+An enabled matching assignment authorizes the first tap attempt, including when launched
+with that file already present. Allow the microphone and system audio capture requests.
+The menu and routing stay responsive while the system waits. If playback goes silent,
+turn either switch off or move the file aside. Quit neqMac if direct playback does not
+resume. Check Privacy & Security before enabling the assignment again. Paused players
+and denied taps can both deliver silence, so Activity cannot establish permission from
+sample values.
+
+The session follows the settled default output, suspends below 32 kHz and compiles the
+profile at the tap's negotiated rate. It requests 128 frames on the aggregate. Profile
+updates keep the running tap. Switching off releases it. A callback stall during active
+playback releases the tap before IO shutdown, which can take longer. After an observed
+failure, edit the file or change outputs to retry. Inspect **Activity** for the reason.

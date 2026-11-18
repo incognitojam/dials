@@ -21,6 +21,38 @@ final class AppModel: ObservableObject {
 
     @Published private(set) var manualOverrideUIDs: [DeviceDirection: String] = [:]
 
+    private var equalizer: OutputEqualizing?
+
+    static func live() -> AppModel {
+        let model = AppModel()
+        if #available(macOS 14.2, *) {
+            let url = URL.applicationSupportDirectory.appending(path: "neqMac/equalizer.json")
+            model.equalizer = EqualizerController(url: url, report: { [weak model] status in
+                DispatchQueue.main.async { model?.equalizerChanged(status) }
+            }, diagnostic: { [weak model] message in
+                DispatchQueue.main.async { model?.appendEvent(message, level: .warning) }
+            })
+            if !model.policy.automationEnabled { model.publishOutput() }
+        }
+        return model
+    }
+
+    private func publishOutput() {
+        guard let equalizer else { return }
+        let id = try? audioClient.defaultDeviceID(for: .output)
+        equalizer.settled(output: devices.first { $0.direction == .output && $0.audioObjectID == id })
+    }
+
+    private func equalizerChanged(_ status: SessionStatus) {
+        switch status {
+        case .starting: break
+        case .running: appendEvent("Equalizer applied", level: .success)
+        case .idle: appendEvent("Equalizer torn down", level: .info)
+        case .suspended(let reason): appendEvent("Equalizer suspended · " + reason, level: .warning)
+        case .failed(let reason): appendEvent("Equalizer failed · " + reason, level: .warning)
+        }
+    }
+
     private let audioClient: AudioDeviceClient
     private let persistence: PolicyPersisting
     private let scheduler: ReconciliationScheduling
@@ -31,10 +63,12 @@ final class AppModel: ObservableObject {
     init(
         audioClient: AudioDeviceClient = CoreAudioClient(),
         persistence: PolicyPersisting = UserDefaultsPolicyStore(),
-        scheduler: ReconciliationScheduling = MainQueueScheduler()
+        scheduler: ReconciliationScheduling = MainQueueScheduler(),
+        equalizer: OutputEqualizing? = nil
     ) {
         self.audioClient = audioClient
         self.persistence = persistence
+        self.equalizer = equalizer
         self.scheduler = scheduler
         self.policy = persistence.load()
 
@@ -235,6 +269,7 @@ final class AppModel: ObservableObject {
     }
 
     private func reconcile(reason: String) {
+        defer { publishOutput() }
         guard policy.automationEnabled else { return }
         reconcile(direction: .output, reason: reason)
         reconcile(direction: .input, reason: reason)
