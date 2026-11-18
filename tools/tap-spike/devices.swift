@@ -52,14 +52,39 @@ func fourCharacterCode(_ code: UInt32) -> String {
 }
 
 let systemObject = AudioObjectID(kAudioObjectSystemObject)
-let defaultOutput = value(systemObject, kAudioHardwarePropertyDefaultOutputDevice, default: AudioObjectID(0)) ?? 0
-let defaultInput = value(systemObject, kAudioHardwarePropertyDefaultInputDevice, default: AudioObjectID(0)) ?? 0
+let arguments = Array(CommandLine.arguments.dropFirst())
 
 var property = address(kAudioHardwarePropertyDevices)
 var size: UInt32 = 0
 AudioObjectGetPropertyDataSize(systemObject, &property, 0, nil, &size)
 var ids = [AudioObjectID](repeating: 0, count: Int(size) / MemoryLayout<AudioObjectID>.size)
 AudioObjectGetPropertyData(systemObject, &property, 0, nil, &size, &ids)
+
+if let flag = arguments.first, flag == "--require-output" || flag == "--require-input" {
+    func fail(_ message: String) -> Never {
+        FileHandle.standardError.write(Data("\(message)\n".utf8))
+        exit(1)
+    }
+    guard arguments.count == 2, !arguments[1].isEmpty else { fail("usage: devices \(flag) <uid>") }
+    let uid = arguments[1]
+    guard let id = ids.first(where: { stringValue($0, kAudioDevicePropertyDeviceUID) == uid }) else {
+        fail("no audio device has UID \(uid); run ./build/devices to list them")
+    }
+    let output = flag == "--require-output"
+    guard channels(id, output ? kAudioObjectPropertyScopeOutput : kAudioObjectPropertyScopeInput) > 0 else {
+        fail("\(uid) is not an \(output ? "output" : "input") device")
+    }
+    print(stringValue(id, kAudioObjectPropertyName) ?? uid)
+    exit(0)
+}
+
+guard arguments.isEmpty else {
+    FileHandle.standardError.write(Data("usage: devices [--require-output <uid> | --require-input <uid>]\n".utf8))
+    exit(1)
+}
+
+let defaultOutput = value(systemObject, kAudioHardwarePropertyDefaultOutputDevice, default: AudioObjectID(0)) ?? 0
+let defaultInput = value(systemObject, kAudioHardwarePropertyDefaultInputDevice, default: AudioObjectID(0)) ?? 0
 
 for id in ids {
     let inputChannels = channels(id, kAudioObjectPropertyScopeInput)
