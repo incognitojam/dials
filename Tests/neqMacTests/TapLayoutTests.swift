@@ -48,11 +48,13 @@ final class TapLayoutTests: XCTestCase {
             mChannelsPerFrame: 2, mBitsPerChannel: 32, mReserved: 0)
     }
 
-    private func run(_ layout: EQInputLayout, _ inputs: [Buffer], _ outputs: [Buffer], gain: Double = 0) throws -> [[Float]] {
+    private func run(_ layout: EQInputLayout, _ inputs: [Buffer], _ outputs: [Buffer], gain: Double = 0,
+                     prepare: (UnsafeMutablePointer<RenderContext>, EqualizerPlan) -> Void = { _, _ in }) throws -> [[Float]] {
         let plan = try EqualizerPlan(.init(gainDB: gain, bands: []), sampleRate: 48_000)
         let p = UnsafeMutablePointer<RenderContext>.allocate(capacity: 1)
         p.initialize(to: RenderContext(plan: plan, channels: 2, layout: layout))
         defer { p.deinitialize(count: 1); p.deallocate() }
+        prepare(p, plan)
         let src = Buffers(inputs), dst = Buffers(outputs)
         RenderContext.render(p, input: src.list.unsafePointer, output: dst.list.unsafeMutablePointer)
         return outputs.indices.map { outputs[$0].sample == nil ? [] : dst.values($0) }
@@ -96,6 +98,18 @@ final class TapLayoutTests: XCTestCase {
         XCTAssertTrue(try run(layout, [Buffer(2, 0.1)], [Buffer(2, nil), Buffer(2, 7)])[1].allSatisfy { $0 == 0 })
     }
 
+    func testInvalidationDiscardsStalePendingSelectionUntilReverified() throws {
+        let layout = EQInputLayout(firstBuffer: 0, bufferCount: 1, totalBuffers: 1, channelsPerBuffer: 2)
+        for reverified in [false, true] {
+            let samples = try run(layout, [Buffer(2, 0.1)], [Buffer(2, 7)]) { p, plan in
+                RenderContext.publish(p, plan: plan, channels: 2, layout: layout)
+                RenderContext.invalidate(p)
+                if reverified { RenderContext.publish(p, plan: plan, channels: 2, layout: layout) }
+            }
+            XCTAssertEqual(samples[0].last, reverified ? 0.1 : 0)
+        }
+    }
+
     func testRenderClampsBothPolaritiesEvenForAnUncappedPlan() throws {
         let layout = EQInputLayout(firstBuffer: 0, bufferCount: 1, totalBuffers: 1, channelsPerBuffer: 2)
         for value: Float in [-0.05, 0.05] {
@@ -103,5 +117,35 @@ final class TapLayoutTests: XCTestCase {
             XCTAssertTrue(samples.allSatisfy { (-1...1).contains($0) })
             XCTAssertEqual(samples.last, value < 0 ? -1 : 1)
         }
+    }
+}
+
+extension TapLayoutTests {
+    func testIOProcInputMaskAndReadback() {
+        let io: AudioDeviceIOProc = { _, _, _, _, _, _, _ in 0 }
+        // Model three streams with the tap in the middle. Change the returned mask
+        // or truncate the variable-length response to exercise the fail-closed paths.
+        let access: EQUsageAccess = { write, scenario, size, usage in
+            guard let usage, let size else { return -1 }
+            XCTAssertNotNil(usage.pointee.mIOProc)
+            let offset = MemoryLayout<AudioHardwareIOProcStreamUsage>.offset(of: \.mStreamIsOn)!
+            XCTAssertEqual(Int(size.pointee), offset + 3 * MemoryLayout<UInt32>.size)
+            let flags = UnsafeMutableRawPointer(usage).advanced(by: offset).assumingMemoryBound(to: UInt32.self)
+            if write {
+                XCTAssertEqual(usage.pointee.mNumberStreams, 3)
+                XCTAssertEqual(Array(UnsafeBufferPointer(start: flags, count: 3)), [0,1,0])
+            } else {
+                usage.pointee.mNumberStreams = 3
+                flags[0] = scenario == 2 ? 1 : 0
+                flags[1] = 1
+                flags[2] = 0
+                if scenario == 3 { size.pointee -= 4 }
+            }
+            return 0
+        }
+        XCTAssertEqual(EQTapStreamUsage(1, io, 3, 1, true, access), noErr)
+        XCTAssertNotEqual(EQTapStreamUsage(2, io, 3, 1, true, access), noErr)
+        XCTAssertNotEqual(EQTapStreamUsage(3, io, 3, 1, false, access), noErr)
+        XCTAssertNotEqual(EQTapStreamUsage(1, io, 3, 3, true, access), noErr)
     }
 }

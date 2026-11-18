@@ -68,12 +68,20 @@ struct RenderContext: ~Copyable {
         p.pointee.pending = PlanChange(plan: plan, mode: .processing, layout: layout)
     }
 
+    static func invalidate(_ p: UnsafeMutablePointer<Self>) {
+        os_unfair_lock_lock(&p.pointee.lock)
+        p.pointee.pending = nil
+        EQPermitRender(p.pointee.meter, false)
+        os_unfair_lock_unlock(&p.pointee.lock)
+    }
+
     @_optimize(speed)
     static func render(_ p: UnsafeMutablePointer<Self>, input: UnsafePointer<AudioBufferList>,
                        output: UnsafeMutablePointer<AudioBufferList>) {
         if os_unfair_lock_trylock(&p.pointee.lock) {
             let change = p.pointee.pending
             p.pointee.pending = nil
+            if change != nil { EQPermitRender(p.pointee.meter, true) }
             if let next = p.pointee.replacement {
                 p.pointee.retired = p.pointee.active
                 p.pointee.active = next
@@ -86,11 +94,10 @@ struct RenderContext: ~Copyable {
             }
         }
         let bank = p.pointee.active
-        let result = EQRender(input, output, p.pointee.layout, UInt32(truncatingIfNeeded: bank.pointee.processor.channels),
+        EQRender(p.pointee.meter, input, output, p.pointee.layout, UInt32(truncatingIfNeeded: bank.pointee.processor.channels),
                                bank.pointee.scratch, RenderBank.chunk, bank) { pointer, samples, frames in
             guard let pointer, let samples else { return false }
             return pointer.assumingMemoryBound(to: RenderBank.self).pointee.processor.process(interleaved: samples, frames: frames)
         }
-        if result != EQLayoutMismatch { EQDidRender(p.pointee.meter, result == EQRendered) }
     }
 }

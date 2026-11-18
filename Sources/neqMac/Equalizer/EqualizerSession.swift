@@ -20,6 +20,7 @@ protocol TapDevice: AnyObject {
     var removed: Bool { get }
     var otherProcessPlaying: Bool { get }
     var heartbeat: UInt64 { get }
+    var layoutMismatch: Bool { get }
 }
 
 enum SessionError: LocalizedError {
@@ -50,6 +51,7 @@ final class SessionGuard {
         hasTap = true
     }
 
+    private var released = false
     private var playing = false
 
     func setPlaying(_ value: Bool) {
@@ -76,21 +78,33 @@ final class SessionGuard {
             lastBeat = beat
         }
         guard now - since >= Self.callbackTolerance else { return nil }
-        device.destroyTap()
-        ended = device.removed ? .suspended("Device removed") : .failed("Audio callback stalled")
+        release()
+        if device.removed { ended = .suspended("Device removed") }
+        else if device.layoutMismatch { ended = .suspended("Tap input layout no longer verified") }
+        else { ended = .failed("Audio callback stalled") }
         return ended
     }
 
     func end(_ status: SessionStatus) -> SessionStatus {
         lock.lock()
         defer { lock.unlock() }
-        return ended ?? finish(status)
+        if let ended { return ended }
+        release()
+        ended = status
+        return status
     }
 
-    private func finish(_ status: SessionStatus) -> SessionStatus {
-        ended = status
-        if hasTap { device.destroyTap() }
-        return status
+    func unmuteBeforeDiagnosis() {
+        lock.lock()
+        defer { lock.unlock() }
+        release()
+    }
+
+    private func release() {
+        if hasTap && !released {
+            device.destroyTap()
+            released = true
+        }
     }
 }
 
@@ -222,11 +236,11 @@ final class SessionEngine {
             appliedRate = plan.sampleRate
         } catch {
             if let session {
+                if status == .starting { session.monitor.unmuteBeforeDiagnosis() }
                 let next: SessionStatus
                 if session.removed {
                     next = .suspended("Device removed")
-                } else if let error = error as? SessionError {
-                    if case .layout = error { requiresEdit = true }
+                } else if case SessionError.lowRate = error {
                     next = .suspended(error.localizedDescription)
                 } else if formatChanged && status == .running {
                     formatRetries += 1
@@ -236,6 +250,10 @@ final class SessionEngine {
                     }
                     requiresEdit = true
                     next = .suspended("Format unavailable after three configuration notifications")
+                    diagnostic(error.localizedDescription)
+                } else if let error = error as? SessionError {
+                    if case .layout = error { requiresEdit = true }
+                    next = .suspended(error.localizedDescription)
                 } else { next = .failed(error.localizedDescription) }
                 finish(session, reason: next)
             }
@@ -245,6 +263,7 @@ final class SessionEngine {
     func finish(_ old: EqualizerSession, reason: SessionStatus) {
         guard old === session else { return }
         let result = old.monitor.end(reason)
+        if result == .suspended("Tap input layout no longer verified") { requiresEdit = true }
         session = nil
         applied = nil
         appliedRate = nil

@@ -76,6 +76,7 @@ final class CoreAudioTap: TapDevice {
             mScope: scope, mElement: kAudioObjectPropertyElementMain)
         var size: UInt32 = 0
         try TapError.check(AudioObjectGetPropertyDataSize(object, &key, 0, nil, &size), "Read buffer list size")
+        if size == 0 { return [] }
         let offset = MemoryLayout<AudioBufferList>.offset(of: \.mBuffers)!
         guard size >= offset else { throw SessionError.layout("Incomplete HAL buffer list") }
         let capacity = size
@@ -90,8 +91,8 @@ final class CoreAudioTap: TapDevice {
     }
 
     private func members(_ selector: UInt32) throws -> [String] {
-        let list: Unmanaged<CFArray> = try CoreAudioClient.readScalar(objectID: aggregate, selector: selector, scope: global)
-        guard let members = list.takeRetainedValue() as? [String] else { throw SessionError.layout("Invalid aggregate membership") }
+        let list: Unmanaged<CFArray>? = try CoreAudioClient.readScalar(objectID: aggregate, selector: selector, scope: global)
+        guard let members = list?.takeRetainedValue() as? [String] else { throw SessionError.layout("Invalid aggregate membership") }
         return members
     }
 
@@ -166,7 +167,12 @@ final class CoreAudioTap: TapDevice {
                 (aggregate, kAudioDevicePropertyBufferFrameSize, global),
                 (aggregate, kAudioDevicePropertyStreams, kAudioObjectPropertyScopeInput)
             ] {
-                observations.append(try AudioObservation(object, selector, scope: scope, queue: queue, change: changed))
+                observations.append(try AudioObservation(object, selector, scope: scope, queue: queue) { [weak self] in
+                    guard let self else { return }
+                    if selector == kAudioDevicePropertyStreams || selector == kAudioDevicePropertyStreamConfiguration ||
+                        selector == kAudioTapPropertyFormat, let render { RenderContext.invalidate(render) }
+                    changed()
+                })
             }
         }
         // HAL publishes the aggregate and its streams separately.
@@ -174,9 +180,12 @@ final class CoreAudioTap: TapDevice {
             do {
                 try configureStreams(profile, proposed: plan)
                 return
-            } catch let error as SessionError { throw error }
-            catch {
-                if attempt == 9 { throw error }
+            } catch {
+                if let render { RenderContext.invalidate(render) }
+                // A running session retries on the next notification. A new aggregate can
+                // still be publishing its initial streams before listeners have run.
+                if io != nil || attempt == 9 { throw error }
+                if case SessionError.lowRate = error { throw error }
                 Thread.sleep(forTimeInterval: 0.025)
             }
         }
@@ -191,6 +200,10 @@ final class CoreAudioTap: TapDevice {
         let outputs = try streams(aggregate, kAudioObjectPropertyScopeOutput)
         let inputWidths = try widths(aggregate, kAudioObjectPropertyScopeInput)
         let outputWidths = try widths(aggregate, kAudioObjectPropertyScopeOutput)
+        if !allowDuplexInput {
+            let physicalInputs = try streams(output.audioObjectID, kAudioObjectPropertyScopeInput)
+            if !physicalInputs.isEmpty || inputs.count > 1 { throw SessionError.layout("Duplex input requires allowDuplexInput") }
+        }
         let frames: UInt32 = try CoreAudioClient.readScalar(objectID: aggregate, selector: kAudioDevicePropertyBufferFrameSize, scope: global)
         diagnostic("Tap format \(format.mSampleRate) Hz, \(format.mChannelsPerFrame) ch, flags \(format.mFormatFlags), \(format.mBitsPerChannel) bits, \(format.mBytesPerFrame) bytes/frame. Aggregate input IDs \(inputs), buffers \(inputWidths); outputs \(outputs), buffers \(outputWidths); IO buffer \(frames) frames")
         guard !outputs.isEmpty, outputWidths.contains(where: { $0 > 0 }), !inputs.isEmpty else {
@@ -232,7 +245,17 @@ final class CoreAudioTap: TapDevice {
         guard before.count == selection.streamCount, before[Int(selection.streamIndex)] == tapStream else {
             throw SessionError.layout("Tap stream moved before input mask verification")
         }
-        let status = EQTapStreamUsage(aggregate, io, selection.streamCount, selection.streamIndex, install)
+        guard let tapStream else { throw SessionError.layout("Missing tap stream identity") }
+        let format: AudioStreamBasicDescription = try CoreAudioClient.readScalar(objectID: tap, selector: kAudioTapPropertyFormat, scope: global)
+        let virtual: AudioStreamBasicDescription = try CoreAudioClient.readScalar(objectID: tapStream, selector: kAudioStreamPropertyVirtualFormat, scope: global)
+        let start: UInt32 = try CoreAudioClient.readScalar(objectID: tapStream, selector: kAudioStreamPropertyStartingChannel, scope: global)
+        let current = try TapLayout(tapID: tapStream, streams: before, startingChannel: start,
+                                    bufferWidths: widths(aggregate, kAudioObjectPropertyScopeInput), format: format, streamFormat: virtual)
+        guard current.buffers.firstBuffer == selection.buffers.firstBuffer, current.buffers.totalBuffers == selection.buffers.totalBuffers,
+              current.buffers.bufferCount == selection.buffers.bufferCount, current.buffers.channelsPerBuffer == selection.buffers.channelsPerBuffer else {
+            throw SessionError.layout("Tap buffer range changed before IO mask verification")
+        }
+        let status = EQTapStreamUsage(aggregate, io, selection.streamCount, selection.streamIndex, install, EQHALStreamUsage)
         guard status == noErr, try streams(aggregate, kAudioObjectPropertyScopeInput) == before else { throw SessionError.layout("Tap-only input stream usage could not be verified (OSStatus \(status))") }
     }
 
@@ -281,6 +304,8 @@ final class CoreAudioTap: TapDevice {
     }
 
     deinit { destroyTap() }
+
+    var layoutMismatch: Bool { EQLayoutMismatch(render!.pointee.meter) }
 
     var heartbeat: UInt64 {
         let meter = render!.pointee.meter

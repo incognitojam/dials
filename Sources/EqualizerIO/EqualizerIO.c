@@ -5,12 +5,14 @@
 #include <string.h>
 
 _Static_assert(ATOMIC_LLONG_LOCK_FREE == 2 && ATOMIC_BOOL_LOCK_FREE == 2, "IO needs lock-free counters");
-struct EQMeter { atomic_ullong cycles, overloads; atomic_bool nonfinite; };
+struct EQMeter { atomic_ullong cycles, overloads; atomic_bool nonfinite, layoutMismatch, unverified; };
 EQMeter *EQMeterCreate(void) { return calloc(1, sizeof(EQMeter)); }
 void EQMeterFree(EQMeter *meter) { free(meter); }
 uint64_t EQHeartbeat(EQMeter *meter) { return atomic_load_explicit(&meter->cycles, memory_order_relaxed); }
 bool EQTakeNonfinite(EQMeter *meter) { return atomic_exchange_explicit(&meter->nonfinite, false, memory_order_relaxed); }
-void EQDidRender(EQMeter *meter, bool healthy) {
+void EQPermitRender(EQMeter *meter, bool permitted) { atomic_store(&meter->unverified, !permitted); }
+bool EQLayoutMismatch(EQMeter *meter) { return atomic_load_explicit(&meter->layoutMismatch, memory_order_relaxed); }
+static void EQDidRender(EQMeter *meter, bool healthy) {
     atomic_fetch_add_explicit(&meter->cycles, 1, memory_order_relaxed);
     if (!healthy) atomic_store_explicit(&meter->nonfinite, true, memory_order_relaxed);
 }
@@ -19,22 +21,28 @@ static uint32_t frames(const AudioBuffer *b) {
     return b->mNumberChannels && b->mData ? b->mDataByteSize / sizeof(float) / b->mNumberChannels : 0;
 }
 
-OSStatus EQTapStreamUsage(AudioObjectID device, AudioDeviceIOProcID io, UInt32 count, UInt32 tap, bool install) {
+OSStatus EQHALStreamUsage(bool write, AudioObjectID device, UInt32 *bytes, AudioHardwareIOProcStreamUsage *usage) {
+    AudioObjectPropertyAddress key = { kAudioDevicePropertyIOProcStreamUsage, kAudioObjectPropertyScopeInput,
+                                       kAudioObjectPropertyElementMain };
+    if (write) return AudioObjectSetPropertyData(device, &key, 0, NULL, *bytes, usage);
+    return AudioObjectGetPropertyData(device, &key, 0, NULL, bytes, usage);
+}
+
+OSStatus EQTapStreamUsage(AudioObjectID device, AudioDeviceIOProcID io, UInt32 count, UInt32 tap, bool install, EQUsageAccess access) {
     size_t size = offsetof(AudioHardwareIOProcStreamUsage, mStreamIsOn) + (size_t)count * sizeof(UInt32);
     if (tap >= count || size > UINT32_MAX) return kAudioHardwareIllegalOperationError;
     AudioHardwareIOProcStreamUsage *usage = calloc(1, size);
     if (!usage) return kAudioHardwareUnspecifiedError;
-    AudioObjectPropertyAddress key = { kAudioDevicePropertyIOProcStreamUsage, kAudioObjectPropertyScopeInput,
-                                       kAudioObjectPropertyElementMain };
     usage->mIOProc = io;
     usage->mNumberStreams = count;
     usage->mStreamIsOn[tap] = 1;
     UInt32 bytes = (UInt32)size;
-    OSStatus status = install ? AudioObjectSetPropertyData(device, &key, 0, NULL, bytes, usage) : noErr;
+    OSStatus status = install ? access(true, device, &bytes, usage) : noErr;
     if (status == noErr) {
         memset(usage, 0, size);
         usage->mIOProc = io;
-        status = AudioObjectGetPropertyData(device, &key, 0, NULL, &bytes, usage);
+        usage->mNumberStreams = count;
+        status = access(false, device, &bytes, usage);
         if (status == noErr && (bytes != size || usage->mNumberStreams != count))
             status = kAudioHardwareBadPropertySizeError;
         for (UInt32 i = 0; status == noErr && i < count; ++i)
@@ -57,14 +65,15 @@ static bool verifiedInput(const AudioBufferList *input, EQInputLayout layout, ui
     return true;
 }
 
-EQRenderResult EQRender(const AudioBufferList *input, AudioBufferList *output, EQInputLayout layout,
+void EQRender(EQMeter *meter, const AudioBufferList *input, AudioBufferList *output, EQInputLayout layout,
               uint32_t channels, float *scratch, uint32_t capacity, void *processor, EQProcess process) {
-    if (!verifiedInput(input, layout, channels)) {
+    if (atomic_load(&meter->unverified) || !verifiedInput(input, layout, channels)) {
         for (uint32_t i = 0; i < output->mNumberBuffers; ++i) {
             AudioBuffer *b = &output->mBuffers[i];
             if (b->mData) memset(b->mData, 0, b->mDataByteSize);
         }
-        return EQLayoutMismatch;
+        atomic_store_explicit(&meter->layoutMismatch, true, memory_order_relaxed);
+        return;
     }
     uint32_t length = 0;
     for (uint32_t i = 0; i < output->mNumberBuffers; ++i) {
@@ -97,7 +106,8 @@ EQRenderResult EQRender(const AudioBufferList *input, AudioBufferList *output, E
         }
         start += count;
     }
-    return healthy ? EQRendered : EQRecovered;
+    atomic_store_explicit(&meter->layoutMismatch, false, memory_order_relaxed);
+    EQDidRender(meter, healthy);
 }
 
 static OSStatus overload(AudioObjectID object, UInt32 count, const AudioObjectPropertyAddress *keys, void *context) {

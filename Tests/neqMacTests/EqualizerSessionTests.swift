@@ -16,6 +16,7 @@ final class EqualizerSessionTests: XCTestCase {
         var zeroOutputChannels = false
         var onRemovalRead: (() -> Void)?
         var removed: Bool { onRemovalRead?(); return deviceGone }
+        var layoutMismatch = false
         var otherProcessPlaying = false
         var heartbeat: UInt64 = 0
         func step(_ name: String) throws {
