@@ -1,5 +1,11 @@
 # @dials/neqmac
 
+## 0.3.0
+
+### Minor Changes
+
+- 05ebc0a: Apply a corrective equalizer profile to the current USB output by editing equalizer.json. Activity shows when the profile is applied or processing stops.
+
 ## 0.2.0
 
 ### Minor Changes
