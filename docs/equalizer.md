@@ -7,11 +7,12 @@ E9). This is the design for it. The measurements it rests on are in
 [System audio taps](audio-taps.md), [Equalizer profiles](eq-profiles.md) and
 [Reading headset state](headset-control.md).
 
-The document keeps three kinds of statement apart. **Decided** is a choice the owner has
+The document keeps four kinds of statement apart. **Decided** is a choice the owner has
 made and a builder should follow. **Measured** links to the document that measured it.
-**Provisional** is a working assumption that a named experiment in
-[Open hardware experiments](#open-hardware-experiments) will confirm or replace; build it
-so it can change.
+**Inferred** was worked out from timestamps rather than heard, and still needs an
+acoustic check. **Provisional** is a working assumption that a named experiment in
+[Hardware experiments](#hardware-experiments) will confirm or replace; build it so it
+can change.
 
 Only the first piece exists. `EqualizerCore` decodes and imports profiles, designs the
 filters and renders them in real time, as described in
@@ -162,18 +163,24 @@ low, or no profile for the current noise-cancelling state. It knows nothing abou
 permission or the engine, so every combination is a unit test without hardware.
 
 **Session status** is observed from the engine: idle, starting, running, comparing,
-permission denied, suspected capture failure, or failed with a reason. The engine starts a
+permission denied, or failed with a reason. The engine starts a
 session only while desired processing says to equalize, and stops it as soon as it does
 not.
 
 The first attempt for an output starts when desired processing first says to equalize it
 after an explicit user action: confirming a profile or switching a device on in the app,
 or, in milestone 2, adding a matching assignment to the settings file. That attempt is
-what raises the system prompts. If permission is denied, the session ends, the assignment
-is kept, and the device shows *Permission denied* with an action to open System Settings.
+what raises the system prompts.
+
+Denial is only handled when it can be observed. A denied tap may report success and
+deliver exact zeros, which the engine cannot tell from a silent player (see
+[Failure](#failure)), so a session that was refused that way may look healthy while the
+output is silent. Whether denial or later revocation can be detected at all is what E6
+decides. Where a failure is observed, the session ends, the assignment is kept, the device
+shows *Permission denied* or the failure with an action to open System Settings, and
 neqMac does not try again on its own. **Retry** takes the retained assignment, evaluates
 desired processing again, and if it still says to equalize, starts one fresh session; if
-permission is still missing, the status returns to *Permission denied*.
+the failure recurs, the status returns to it.
 
 ## Which outputs get an equalizer
 
@@ -191,6 +198,11 @@ So a soundbar or display connected over HDMI or DisplayPort cannot be assigned a
 until milestone 8, whatever kind of device it is. Bluetooth waits for E8 because
 [System audio taps](audio-taps.md#open-questions) leaves the acoustic timing of a tapped
 Bluetooth stream unexplained; milestone 3 does not enable it until that is understood.
+The edge-case runs sharpen the concern: timestamps suggest the tap receives a headset's
+audio about one device latency late, roughly 200 ms on the WH-1000XM4. That is inferred,
+not heard. If an acoustic measurement confirms it, tapped Bluetooth playback is about
+200 ms later than untapped, a real cost for video sync that the interface would have to
+state.
 
 Among eligible outputs, the kind of device decides only what neqMac offers:
 
@@ -227,19 +239,44 @@ indefinitely (measured). Building it:
 4. Read the tap's format and compile the plan at that rate.
 5. Create and start the IOProc.
 
-A failure at any step must destroy whatever the earlier steps created; that is a
-requirement. Everything else in this section is provisional:
+A failure at any step must destroy whatever the earlier steps created (decided). The
+rest of this section follows from the measurements in [What the tap does at its
+edges](audio-taps.md#what-the-tap-does-at-its-edges), made on the built-in speakers and,
+by timestamps only, on a Bluetooth headset. They are decided unless marked otherwise;
+the USB repeats listed in [Hardware experiments](#hardware-experiments) could still
+change them.
 
-- **Teardown order.** Stop and destroy the IOProc, then the aggregate, then the tap. The
-  spike established that a tap mutes the device while an IOProc runs, not exactly when the
-  mute begins or lifts. E2 and E5 decide the order.
-- **Retargeting.** When the output changes, stop the old session and start one for the
-  new device. E1 measures the gap and whether starting the new one first is better.
-- **Rate and format changes.** Recompile the plan, and rebuild the session if the IOProc
-  stopped. E3 decides which happens.
-- **Sleep.** Stop the session before the Mac sleeps and reconcile after it wakes. E4
-  decides whether that is needed.
-- A device that dies stops its session, and repeated overloads are logged.
+- **The IOProc never blocks.** A stuck callback keeps the output silent until the tap is
+  destroyed, a frozen process keeps it silent until it is continued or dies, and
+  `AudioDeviceStop` waits behind a stuck callback. Nothing in the callback may wait on
+  anything that can block.
+- **Teardown destroys the tap first,** then stops and destroys the IOProc, then destroys
+  the aggregate. With the callback stuck, destroying the tap returned in under 0.2 ms and
+  the original was back at the microphone about 81 ms later, while stopping the IOProc
+  first left the output silent for the whole stall; tap-first is the order that
+  succeeded. In normal operation the orders sounded the same. Destroying the aggregate
+  before the IOProc made the IOProc's destroy fail. Teardown runs on the session queue,
+  never the main thread, because stopping the IOProc can block.
+- **Retargeting** stops the old session and starts one for the new device. Ending on the
+  speakers, this gave 35–50 ms of unprocessed audio, then about 25 ms with both the
+  original and the marker present, and no silence; the order made no measurable
+  difference there.
+- **Rate and format changes recompile, never rebuild,** while the device stays eligible.
+  The IOProc survives a rate change on its own: on the speakers the interval between
+  callbacks was 108–184 ms, after which the aggregate restarted at the new rate. The plan
+  is recompiled on the format notification. The IOProc must tolerate the channel count
+  changing and the buffer size changing, the session re-applies its preferred buffer size
+  afterwards, and nothing may depend on the order of the notifications, which varied
+  between runs. A rate below 32 kHz, such as the 16 kHz one-channel call profile a headset
+  switched to, is not recompiled: it suspends EQ and tears the tap down.
+- **Device loss is detected from notifications.** In all three Bluetooth losses the device
+  reported it was no longer alive and the device list changed, while the IOProc kept being
+  called with silent input, zero output channels and no error; the orphaned aggregate
+  re-adopted the headset when it reconnected. The session tears down on those
+  notifications.
+- **Sleep** stops the session before the Mac sleeps and reconciles after it wakes. This is
+  provisional until E4.
+- Repeated overloads are logged.
 
 ### Off means off
 
@@ -249,8 +286,13 @@ latency plus the device's safety offsets (measured; on USB, acoustically, about 
 more than the timestamps report), a permission, a wakeup on every cycle, and a way to make
 the Mac silent. None of that is worth paying to apply no filter.
 
-Building or tearing down a tap interrupts playback for a time E1 will measure, so on/off is
-a deliberate, debounced switch, never a hover or something that can be toggled rapidly.
+Building or tearing down a tap did not leave a silent gap on the speakers. The original
+and the marker that stood in for the processed copy overlapped for up to about 45 ms.
+With real passthrough that would be the same audio twice about 26 ms apart, by the IO
+timestamps, which should sound like a flam rather than a dropout (inferred). On/off is
+still a deliberate, debounced switch, never a hover or something that can be toggled
+rapidly. On the headset, a tap built mid-playback delivered about 200 ms of zeros first,
+which may be heard as silence (inferred).
 
 The one exception is **compare**: holding a button to hear the difference, which keeps the
 tap running and switches the processor's mode (decided). Compare is level-matched. A
@@ -264,28 +306,37 @@ and its release go through the processor's crossfade, which reduces switching ar
 ### Permission
 
 The tap needs two permissions, microphone and system audio capture, and both usage
-strings must be in neqMac's `Info.plist` (measured). A user who only routes must never see
-either prompt, so neqMac never asks at launch; the first request follows the user action
-described in [Desired processing and session status](#desired-processing-and-session-status).
-There appears to be no public way to check audio-capture authorisation in advance, and
-what happens when it is revoked mid-session is unknown; E6 answers both.
+strings must be in neqMac's `Info.plist` (measured). A user who only routes must never
+see either prompt, so neqMac never asks at launch; the first request follows the user
+action described in [Desired processing and session
+status](#desired-processing-and-session-status). There appears to be no public way to
+check audio-capture authorisation in advance, and what happens when it is revoked
+mid-session is unknown; E6 answers both. On one fresh signing identity, building a
+session took 41.5 s while the prompt was on screen and completed once it was answered;
+the logged `AudioDeviceStart` took 0.118 ms, so the wait came before it, and which call
+blocked is not known.
 
 ### Failure
 
 The invariant (decided): **no state leaves a tap muting the output without a running,
 healthy IOProc**. Because `mutedWhenTapped` silences the device while the tap runs, a
-broken equalizer does not degrade audio, it stops it. Every failure therefore ends the
-same way: tear down, let the audio play uncorrected, and say so.
+broken equalizer does not degrade audio, it stops it. Every failure that can be observed
+therefore ends the same way: tear down, let the audio play uncorrected, and say so. A
+denied or revoked permission that delivers zeros is not yet observable; see E6.
 
-- **Heartbeat.** The IOProc counts its cycles. If the count stops moving while the
-  session claims to be running, it is torn down. The timeout is provisional.
-- **Suspected capture failure.** An unauthorised tap reports success and delivers exact
-  zeros (measured). But zeros are not proof of failure — silence is valid audio — and a
-  non-zero sample shows only that capture worked at that moment, since permission might be
-  revoked while callbacks continue (E6). E7 decides whether a reliable signal exists, such
-  as exact zeros while another process is known to be playing to the device, before any
-  threshold is chosen. Until then the check is a suspicion that tears down and says so,
-  not a diagnosis.
+- **Heartbeat.** The IOProc counts its cycles, and a watchdog on another thread checks
+  the count. An idle tap gets no callbacks at all, so the watchdog is armed only while some
+  process other than neqMac is running output to the device; neqMac's own process reports
+  running output too, and is excluded. The tolerance is a chosen 350 ms, informed by the
+  largest gap seen around a format change, 340.5 ms when a headset left its call profile.
+  A stall beyond it tears the session down, tap first. The watchdog lives in the same
+  process, so it can act on a stuck callback but not on the whole process being
+  suspended; that case only ends when the process continues or dies.
+- **Zeros are not a failure.** Paused players and silent media keep their output running
+  and send exact zeros, throughout the observed 5.94 s pause in QuickTime's case, so a
+  tap that delivers only zeros is not treated as failed and there is no back-off based
+  on zeros (decided). The cost is that an unauthorised tap, which also delivers zeros,
+  is not caught this way; detecting a missing or revoked permission is left to E6.
 - **Non-finite samples.** The processor already silences the affected sample, resets that
   channel and fades back in; the controller logs it.
 - **Back-off.** After a failure, neqMac does not restart the session on its own until the
@@ -293,8 +344,9 @@ same way: tear down, let the audio play uncorrected, and say so.
   cannot flap the audio on and off. The limits are provisional.
 - **Activity.** Every start, stop and failure is posted to the Activity timeline with its
   reason.
-- **Crashes.** The tap and aggregate belong to the process and should disappear with it.
-  E5 has to show that before any of this reaches a user.
+- **Crashes need nothing.** Ending the process released the mute and left no tap or
+  aggregate behind in every run, so there is nothing to recover after a crash. A hang is
+  the danger: a frozen process keeps the device silent until it is continued or killed.
 
 A false positive from a check turns the equalizer off. That is acceptable; the opposite
 failure is not.
@@ -329,10 +381,11 @@ swapping pairs takes one click. Only USB outputs get it.
 In the **menu bar**, EQ is one line inside the existing Output card, because it is a
 property of the output that is playing: the profile name, an on/off switch and a
 hold-to-compare button. An output without a profile shows no line, so for speakers and
-displays the panel looks as it does today. When the session fails or permission is denied,
-the line becomes the existing orange error banner, and its first sentence is what the user
-hears — that audio is playing normally, without correction — with **Retry** or an action
-to open System Settings.
+displays the panel looks as it does today. When the engine observes a failure, including
+a denied permission once E6 shows how to detect one, the line becomes the existing
+orange error banner, and its first sentence is what the user hears — that audio is
+playing normally, without correction — with **Retry** or an action to open System
+Settings.
 
 The permission request is preceded by a short explanation of the two system prompts that
 follow: audio is processed on the Mac and never recorded or sent anywhere, routing works
@@ -371,25 +424,38 @@ Each is one pull request with its own tests, and updates this document.
 8. **Buffer size, AirPlay, HDMI and DisplayPort.** A latency setting or a better default,
    and enabling the transports the experiments clear.
 
-## Open hardware experiments
+## Hardware experiments
 
-None of these has been run. E1 to E7 and E15 should be answered before milestone 2 merges;
-several can use that branch's build.
+### Run
+
+These were run on macOS 27.0.1 with the built-in speakers and a WH-1000XM4 over
+Bluetooth; the details are in [What the tap does at its
+edges](audio-taps.md#what-the-tap-does-at-its-edges). Only the speakers could be heard,
+so every headset result is inferred from timestamps.
+
+| # | Result | What remains |
+| --- | --- | --- |
+| E1 | Build and teardown overlap the original and the marker for up to about 45 ms on the speakers, with no silent gap, in 7 builds across three teardown orders; both aggregate-first teardowns failed to destroy the IOProc. Retarget order made no audible difference in the two retargets that ended on the speakers. On the headset a tap built mid-playback delivered about 197 ms of zeros first (inferred). | Repeat on a USB DAC, and listen on the headset with a microphone in the cup |
+| E2, Bluetooth | One power-off and two software disconnects left the IOProc running with silent input and no error; the loss arrived as notifications. The speakers the audio moved to were not muted. In the two runs that reconnected and played to the headset, the orphaned aggregate re-adopted it. | Unplugging a USB DAC while tapped; whether a reconnected headset is muted by an orphaned tap, with a microphone in the cup |
+| E3 | A rate change left 108–184 ms between callbacks and the IOProc resumed at the new rate; the call profile changed the channel count and buffer size. Recompile while the device stays eligible, never rebuild. | Repeat on a USB DAC |
+| E5 | Ending the process without teardown released the mute in all 11 runs, and no tap or aggregate was left after any of the 15. A frozen process kept the output silent while stopped; a stuck callback kept it silent until the tap was destroyed, while `AudioDeviceStop` waited 2.5 s behind it. | Repeat on a USB DAC |
+| E7 | Paused and silent players send exact zeros while running output; an idle tap gets no callbacks. Zeros are not a failure signal. | None for the decision |
+
+### Open
+
+None of these questions has been answered. E4, E6 and E15, and the USB repeats of E1,
+E2, E3 and E5 above, should be answered before milestone 2 merges, since it equalizes
+USB outputs; several can use that branch's build.
 
 | # | Question | What it decides | Needed by |
 | --- | --- | --- | --- |
-| E1 | How long and how audible is the gap when a tap is created or destroyed mid-playback, or retargeted to another device? Is creating the new one before destroying the old one better? | The cost of on/off and of routing switches, and the retarget order | 2 |
-| E2 | Unplugging USB or disconnecting Bluetooth while tapped: does the IOProc stop cleanly, does the aggregate go away, and is anything left muted on the device the system falls back to? When exactly does the mute lift during teardown? | The teardown order and whether it keeps the never-silent invariant | 2 |
-| E3 | Changing the device's sample rate while tapped, including Bluetooth switching to its call profile: does the IOProc continue, and do the tap and aggregate follow? | Whether a rate change recompiles or rebuilds | 2 |
 | E4 | Sleep and wake with a tap running, compared with tearing it down first | Sleep handling | 2 |
-| E5 | `kill -9` or a crash with a tap running: does output resume immediately on its own? | Whether a crash can leave the Mac silent; the largest unknown | 2 |
-| E6 | Is there a public way to check audio-capture permission in advance? When it is revoked while a tap runs, is the process killed, do callbacks continue with zeros, or does an error arrive? | Permission flow, and how mid-session loss is detected | 2, 3 |
-| E7 | Do common players and call apps send exact zeros while paused but still running IO? Is there any signal that distinguishes a failed capture from real silence? | Whether a capture-failure check can be reliable, and its threshold | 2 |
-| E8 | Repeat the Bluetooth acoustic timing scatter with the headset's upscaler and noise cancelling off, and check lip-sync through the tap | The open question in [System audio taps](audio-taps.md#open-questions), and whether Bluetooth is enabled | 3 |
+| E6 | Is there a public way to check audio-capture permission in advance? When it is revoked while a tap runs, is the process killed, do callbacks continue with zeros, or does an error arrive? | Permission flow, and how a missing or revoked permission is detected | 2, 3 |
+| E8 | Measure a tapped Bluetooth stream acoustically with a microphone in the cup, with the headset's upscaler and noise cancelling off: is it about 200 ms later than untapped, as the timestamps suggest? Check lip-sync through the tap | The open question in [System audio taps](audio-taps.md#open-questions), and whether Bluetooth is enabled | 3 |
 | E9 | Are alert sounds, and apps that take a device exclusively, captured by the tap? | What the equalizer can promise to cover | 3 |
 | E10 | Does a tap work on AirPlay, HDMI and DisplayPort outputs at all, with what channel count and latency? | Which transports are supported | 8 |
 | E11 | Does a 64- or 128-frame aggregate buffer change the device's buffer for other apps, and what does it cost on Bluetooth? | The default buffer size | 8 |
 | E12 | Does holding the Sony control channel open disturb playback, and is state broadcast with multipoint on? On firmware 3.0.1, does cycling the earcup button produce change notifications? | Whether following noise cancelling is safe, and whether notifications can be relied on on 3.0.1 | 6 |
 | E13 | A soundbar over HDMI at 5.1: what layout does the tap deliver, and does one chain per channel sound right? | Multichannel outputs | 8 |
 | E14 | Does the tap's added latency appear in `kAudioDevicePropertyLatency`, where video players would read it? | Lip-sync on wired outputs | 8 |
-| E15 | Once an unanswered first prompt blocks `AudioDeviceStart`, does it clear when the user answers? Does the session need a timeout and a cancel path? | The session queue's design | 2 |
+| E15 | Which call blocks while the first prompt is unanswered, and does it always clear when the user answers? Once, a build waited 41.5 s and completed after the prompt was answered, but the wait came before `AudioDeviceStart`. Does the session need a timeout and a cancel path? | The session queue's design | 2 |
