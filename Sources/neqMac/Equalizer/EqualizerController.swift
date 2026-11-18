@@ -168,6 +168,7 @@ final class EqualizerController: OutputEqualizing {
 
     private func evaluate(retry: Bool = false, formatChanged: Bool = false) {
         guard !asleep.withLock({ $0 }) else { return }
+        if formatChanged { engine.session?.monitor.formatChanged() }
         let current: AudioDevice?
         if let output, case let .loaded(settings) = file, settings.enabled {
             current = hardware.isCurrent(output) ? output : nil

@@ -32,7 +32,7 @@ final class AppModel: ObservableObject {
             }, report: { [weak model] status in
                 DispatchQueue.main.async { model?.equalizerChanged(status) }
             }, diagnostic: { [weak model] message in
-                DispatchQueue.main.async { model?.appendEvent(message, level: .warning) }
+                DispatchQueue.main.async { model?.appendEvent(message, level: .info) }
             })
             if !model.policy.automationEnabled { model.publishOutput() }
         }
