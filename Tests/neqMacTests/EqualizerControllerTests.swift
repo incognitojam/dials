@@ -8,7 +8,7 @@ import XCTest
 final class EqualizerControllerTests: XCTestCase {
     final class Hardware: EqualizerHardware {
         var present = true
-        var rateValue = 48_000.0
+        var rateValue: Double? = 48_000
         var fail = false
         var backends: [EqualizerSessionTests.Backend] = []
         var callbacks: [() -> Void] = []
@@ -72,11 +72,15 @@ final class EqualizerControllerTests: XCTestCase {
         queue.sync {
             XCTAssertEqual(hardware.backends.count, 2)
             XCTAssertFalse(hardware.wanted[0]())
+            hardware.rateValue = nil
+            hardware.callbacks[1]()
+            XCTAssertEqual(hardware.backends.count, 2)
+            XCTAssertEqual(hardware.backends[1].rates, [48_000, 48_000])
             hardware.rateValue = 96_000
             hardware.callbacks[0]()
-            XCTAssertEqual(hardware.backends[1].rates, [48_000])
+            XCTAssertEqual(hardware.backends[1].rates, [48_000, 48_000])
             hardware.callbacks[1]()
-            XCTAssertEqual(hardware.backends[1].rates, [48_000, 96_000])
+            XCTAssertEqual(hardware.backends[1].rates, [48_000, 48_000, 96_000])
             XCTAssertTrue(messages.contains { $0.hasPrefix("Create tap: ") })
         }
     }

@@ -56,6 +56,7 @@ final class EqualizerController: OutputEqualizing {
     private let url: URL
     private let diagnostic: (String) -> Void
     private var output: AudioDevice?
+    private var lastRate: Double?
     private var generation = UUID()
     private var cancelRate: (() -> Void)?
     private var fileBytes: Data?
@@ -117,6 +118,7 @@ final class EqualizerController: OutputEqualizing {
         queue.async { [self] in
             guard output?.audioObjectID == device.audioObjectID else { return }
             output = nil
+            lastRate = nil
             observeRate()
             if let session = engine.session { engine.finish(session, reason: .suspended("Device removed")) }
         }
@@ -126,7 +128,10 @@ final class EqualizerController: OutputEqualizing {
         queue.async { [self] in
             let changed = self.output != output
             self.output = output
-            if changed { observeRate() }
+            if changed {
+                lastRate = nil
+                observeRate()
+            }
             evaluate()
         }
     }
@@ -175,7 +180,13 @@ final class EqualizerController: OutputEqualizing {
         } else { current = output }
         let rate: Double?
         if let current, case let .loaded(settings) = file, settings.enabled, DesiredEqualizer.eligible(current) {
-            rate = hardware.rate(current)
+            if let observed = hardware.rate(current) {
+                lastRate = observed
+                rate = observed
+            } else {
+                // The live tap still verifies its negotiated format during clock relock.
+                rate = engine.session == nil ? nil : lastRate
+            }
         } else { rate = nil }
         let desired = DesiredEqualizer.resolve(file, device: current, rate: rate)
         let previous = engine.session
