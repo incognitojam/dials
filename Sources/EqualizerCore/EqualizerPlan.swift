@@ -117,7 +117,7 @@ package struct EqualizerPlan: Sendable, BitwiseCopyable {
     package static func playback(_ profile: ParametricEQ, sampleRate: Double) throws -> Self {
         var plan = try Self(profile, sampleRate: sampleRate)
         let upper = sampleRate / 2
-        let lower = min(20, upper)
+        let lower = min(1, upper)
         var peak = -Double.infinity
         func measure(_ hz: Double) throws -> Double {
             let db = plan.magnitudeDB(at: hz)
@@ -131,10 +131,11 @@ package struct EqualizerPlan: Sendable, BitwiseCopyable {
             let bins = 4096
             var frequencies = (0...bins).map { lower * pow(upper / lower, Double($0) / Double(bins)) }
             frequencies[bins] = upper
+            frequencies.append(0)
             for band in profile.bands {
                 let center = min(band.frequency, sampleRate * 0.49)
-                if center >= lower { frequencies.append(center) }
-                if (lower...upper).contains(band.frequency) { frequencies.append(band.frequency) }
+                frequencies.append(center)
+                if band.frequency <= upper && band.frequency != center { frequencies.append(band.frequency) }
             }
             frequencies.sort()
             let response = try frequencies.map(measure)
