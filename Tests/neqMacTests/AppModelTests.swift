@@ -11,6 +11,34 @@ final class AppModelTests: XCTestCase {
         scheduler = ManualScheduler()
     }
 
+    func testEqualizerFollowsSettledDefaultWithRoutingDisabled() {
+        final class Recorder: OutputEqualizing {
+            var outputs: [AudioDevice?] = []
+            var disconnectedIDs: [AudioObjectID] = []
+            func settled(output: AudioDevice?) { outputs.append(output) }
+            func disconnected(_ device: AudioDevice) { disconnectedIDs.append(device.audioObjectID) }
+        }
+        let first = device(1, uid: "test-first")
+        let second = device(2, uid: "test-second")
+        let client = TestAudioClient(devices: [first, second], outputID: first.audioObjectID)
+        let eq = Recorder()
+        let model = AppModel(audioClient: client, persistence: MemoryPolicyStore(), scheduler: scheduler, equalizer: eq)
+        model.handleHardwareChange()
+        client.outputID = second.audioObjectID
+        model.handleHardwareChange()
+        XCTAssertTrue(eq.outputs.isEmpty)
+        scheduler.runPending()
+        XCTAssertEqual(eq.outputs, [second])
+        client.availableDevices = [first]
+        model.handleHardwareChange()
+        XCTAssertEqual(eq.disconnectedIDs, [second.audioObjectID])
+        client.availableDevices = [first, second]
+        model.handleHardwareChange()
+        scheduler.runPending()
+        XCTAssertEqual(eq.outputs, [second, second])
+        XCTAssertTrue(client.selections.isEmpty)
+    }
+
     func testSelectionAndReconnectPreserveOneAirPlayRule() throws {
         let expectedUIDs = ["usb", "saved-receiver", "other-room", "tv"]
         let receiver = device(1, uid: "live-receiver")

@@ -2,7 +2,7 @@
 
 neqMac is an early native macOS audio device guardian. It keeps the system on the highest-priority connected input and output devices, and can reject devices that should never become a system default.
 
-The app deliberately applies no equalizer yet. Its job so far is to validate reliable device discovery and switching before an audio-processing pipeline is added. The filter library, `EqualizerCore`, is built and tested, but nothing in the app uses it: there is no tap, no setting and no interface. How the remaining pieces will fit together, and the order they will be built in, is in [Equalizer](equalizer.md).
+USB outputs can use a corrective equalizer on macOS 14.2 or later. Enable it with a per-output assignment in the [equalizer settings file](equalizer-settings.md). Routing works independently. The [equalizer design](equalizer.md) describes the engine and planned interface.
 
 How the equalizer will reach the signal path, and what a Core Audio process tap costs in latency and permissions, is measured in [System audio taps](audio-taps.md).
 

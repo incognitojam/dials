@@ -14,12 +14,11 @@ acoustic check. **Provisional** is a working assumption that a named experiment 
 [Hardware experiments](#hardware-experiments) will confirm or replace; build it so it
 can change.
 
-Only the first piece exists. `EqualizerCore` decodes and imports profiles, designs the
-filters and renders them in real time, as described in
-[How curves are computed](eq-profiles.md#how-curves-are-computed) and
-[Rendering a profile](eq-profiles.md#rendering-a-profile). Nothing in the app uses it
-yet: there is no tap, no settings file and no interface. Everything below that is not
-`EqualizerCore` is a plan.
+The filter library and USB session engine are implemented. Enable an output with a
+copied profile in the [equalizer settings file](equalizer-settings.md) and inspect
+Activity for session status. The profile browser, editor, compare control and headset
+integration are planned. Filter design and rendering are described in
+[Equalizer profiles](eq-profiles.md).
 
 ## How the pieces fit
 
@@ -227,17 +226,38 @@ A device with more than two channels gets the same chain on every channel.
 ### Lifecycle
 
 A session is built on its own serial queue, never on the main thread, because
-[an unanswered permission prompt can block `AudioDeviceStart`](audio-taps.md#two-things-not-to-repeat)
-indefinitely (measured). Building it:
+[a permission prompt can hold up construction](audio-taps.md#two-things-not-to-repeat).
+The measured 41.5 s wait occurred before `AudioDeviceStart`. Building it:
 
 1. Translate neqMac's process ID to a Core Audio process object, retrying, since this
    fails transiently just after launch (measured; the retry budget is provisional).
 2. Create the tap for the output device's first stream, excluding neqMac, muted when
    tapped.
-3. Create the private aggregate with the device as its main sub-device and the tap in
-   its tap list.
-4. Read the tap's format and compile the plan at that rate.
-5. Create and start the IOProc.
+3. Create a private aggregate containing just the tap. Confirm its tap UUID and sole
+   input stream ID, then attach the real output as its main sub-device.
+4. Identify the aggregate's tap input and match its starting channel, channel count and
+   Float32 format to the buffer configuration. Compile the plan at the tap rate.
+5. Create the IO proc, enable only the verified tap stream for input, read back every
+   stream flag, and start IO. The callback checks the selected planes and the null
+   buffers of disabled inputs. A mismatched layout produces silence and cannot advance
+   the watchdog heartbeat.
+
+A USB device with inputs requires the assignment key `allowDuplexInput` to be true.
+The default suspends before tap creation. Opt-in keeps all the identity, format and
+stream-usage checks. The macOS SDK documents that sub-taps have no streams of their
+own. On an output-only DAC the aggregate's sole input identifies the tap even if HAL
+reissues the stream ID. On a duplex DAC the tap-only stream ID must survive attachment
+at either end of the stream list, alongside one stream per physical input stream.
+Reconfiguration checks the IO-proc mask and repairs a changed mask before republishing
+the input selection. Apple's stream mask applies to the
+IO proc. Driver-level microphone power and the behaviour of the target USB DAC still
+need hardware verification. [Apple’s IO-proc stream usage](https://developer.apple.com/documentation/coreaudio/audiohardwareioprocstreamusage)
+
+Playback headroom covers DC through Nyquist. The peak search samples DC, 4096
+logarithmic intervals from 1 Hz to Nyquist, and each in-range band center. It refines
+the peak estimate around local maxima.
+Any peak above 0 dB reduces both preamp and compare gain by the excess. Activity records
+the reduction. A final clamp bounds each rendered sample to [−1, 1].
 
 A failure at any step must destroy whatever the earlier steps created (decided). The
 rest of this section follows from the measurements in [What the tap does at its
@@ -265,15 +285,20 @@ change them.
   The IOProc survives a rate change on its own: on the speakers the interval between
   callbacks was 108–184 ms, after which the aggregate restarted at the new rate. The plan
   is recompiled on the format notification. The IOProc must tolerate the channel count
-  changing and the buffer size changing, the session re-applies its preferred buffer size
-  afterwards, and nothing may depend on the order of the notifications, which varied
-  between runs. A rate below 32 kHz, such as the 16 kHz one-channel call profile a headset
+  changing and the buffer size changing. M2 observes the current size. Requesting a
+  different size remains open until E11 measures the effect on other clients.
+  Format notifications reset the watchdog interval. Transient property-read failures
+  retry on subsequent notifications, with suspension after three unsuccessful updates.
+  If the watchdog releases the mute because the layout became unverifiable, the controller
+  re-evaluates the current output and settings once after 750 ms. A repeated layout loss
+  stays suspended. A rate below 32 kHz, such as the 16 kHz one-channel call profile a headset
   switched to, is not recompiled: it suspends EQ and tears the tap down.
 - **Device loss is detected from notifications.** In all three Bluetooth losses the device
   reported it was no longer alive and the device list changed, while the IOProc kept being
   called with silent input, zero output channels and no error; the orphaned aggregate
   re-adopted the headset when it reconnected. The session tears down on those
-  notifications.
+  notifications when the device is no longer alive or is absent from the hardware list.
+  An empty aggregate output list alone can occur during a rate change.
 - **Sleep** stops the session before the Mac sleeps and reconciles after it wakes. This is
   provisional until E4.
 - Repeated overloads are logged.
@@ -325,12 +350,13 @@ therefore ends the same way: tear down, let the audio play uncorrected, and say 
 denied or revoked permission that delivers zeros is not yet observable; see E6.
 
 - **Heartbeat.** The IOProc counts its cycles, and a watchdog on another thread checks
-  the count. An idle tap gets no callbacks at all, so the watchdog is armed only while some
-  process other than neqMac is running output to the device; neqMac's own process reports
-  running output too, and is excluded. The tolerance is a chosen 350 ms, informed by the
+  the count. An idle tap gets no callbacks. The watchdog disarms while a fresh activity
+  poll confirms that no other process is running output on the device. A failed poll or
+  an idle reading older than 250 ms arms it until a fresh result arrives. The tolerance is a chosen 350 ms, informed by the
   largest gap seen around a format change, 340.5 ms when a headset left its call profile.
-  A stall beyond it tears the session down, tap first. The watchdog lives in the same
-  process, so it can act on a stuck callback but not on the whole process being
+  On expiry the watchdog destroys the tap before querying physical removal. A separate
+  queue samples other-process activity so a blocked HAL query cannot hold up mute release.
+  The watchdog lives in the same process, so it can act on a stuck callback but not on the whole process being
   suspended; that case only ends when the process continues or dies.
 - **Zeros are not a failure.** Paused players and silent media keep their output running
   and send exact zeros, throughout the observed 5.94 s pause in QuickTime's case, so a
@@ -396,7 +422,8 @@ primary model, were considered and not chosen.
 
 ## Milestones
 
-Each is one pull request with its own tests, and updates this document.
+Milestone 2 ships as three dependent pull requests covering settings and headroom, the
+session and renderer, and app integration. Each layer includes its tests.
 
 1. **`EqualizerCore`.** Profile format, AutoEq import, filter design, response
    evaluation and the real-time processor, with no Apple framework imports. *Shipped in
