@@ -10,6 +10,7 @@ final class EqualizerControllerTests: XCTestCase {
         var present = true
         var rateValue: Double? = 48_000
         var fail = false
+        var mismatchOnFirstSession = false
         var backends: [EqualizerSessionTests.Backend] = []
         var callbacks: [() -> Void] = []
         var wanted: [() -> Bool] = []
@@ -20,6 +21,10 @@ final class EqualizerControllerTests: XCTestCase {
         func tap(_ device: AudioDevice, duplex: Bool, queue: DispatchQueue, diagnostic: @escaping (String) -> Void,
                  wanted: @escaping () -> Bool, changed: @escaping () -> Void) -> TapDevice {
             let backend = EqualizerSessionTests.Backend()
+            if mismatchOnFirstSession && backends.isEmpty {
+                backend.otherProcessPlaying = true
+                backend.layoutMismatch = true
+            }
             if fail { backend.failure = "tap" }
             backends.append(backend)
             callbacks.append(changed)
@@ -37,13 +42,17 @@ final class EqualizerControllerTests: XCTestCase {
     var url: URL { directory.appendingPathComponent("equalizer.json") }
     var controller: EqualizerController!
     var statuses: [SessionStatus] = []
+    var onStatus: ((SessionStatus) -> Void)?
     var messages: [String] = []
 
     override func setUpWithError() throws {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         try Data(json.utf8).write(to: url)
         controller = EqualizerController(url: url, hardware: hardware, queue: queue, didTearDown: {},
-            report: { [weak self] in self?.statuses.append($0) }, diagnostic: { [weak self] in self?.messages.append($0) })
+            report: { [weak self] status in
+                self?.statuses.append(status)
+                self?.onStatus?(status)
+            }, diagnostic: { [weak self] in self?.messages.append($0) })
     }
 
     override func tearDownWithError() throws {
@@ -103,6 +112,46 @@ final class EqualizerControllerTests: XCTestCase {
             XCTAssertEqual(hardware.backends.count, 2)
             try Data("{}".utf8).write(to: url)
             XCTAssertFalse(hardware.wanted[1]())
+        }
+    }
+
+    func testWatchdogLayoutSuspensionRetriesAfterSettleWithoutFileEdit() {
+        let recovered = expectation(description: "verified replacement session")
+        var suspendedAt: TimeInterval?
+        hardware.mismatchOnFirstSession = true
+        onStatus = { status in
+            if status == .suspended("Tap input layout no longer verified") {
+                suspendedAt = ProcessInfo.processInfo.systemUptime
+            }
+            if status == .running, let suspendedAt {
+                XCTAssertGreaterThanOrEqual(ProcessInfo.processInfo.systemUptime - suspendedAt, 0.5)
+                recovered.fulfill()
+            }
+        }
+        controller.settled(output: device)
+        wait(for: [recovered], timeout: 4)
+        queue.sync {
+            XCTAssertEqual(hardware.backends.count, 2)
+            XCTAssertFalse(hardware.wanted[0]())
+            XCTAssertTrue(hardware.wanted[1]())
+        }
+    }
+
+    func testTurningOffWhileLayoutRetryIsPendingPreventsCapture() throws {
+        let suspended = expectation(description: "layout suspended")
+        hardware.mismatchOnFirstSession = true
+        onStatus = { status in
+            if status == .suspended("Tap input layout no longer verified") { suspended.fulfill() }
+        }
+        controller.settled(output: device)
+        wait(for: [suspended], timeout: 3)
+        try Data("{}".utf8).write(to: url, options: .atomic)
+        let settled = expectation(description: "retry deadline passed")
+        queue.asyncAfter(deadline: .now() + 1) { settled.fulfill() }
+        wait(for: [settled], timeout: 3)
+        queue.sync {
+            XCTAssertEqual(hardware.backends.count, 1)
+            XCTAssertEqual(statuses.last, .idle)
         }
     }
 

@@ -80,6 +80,12 @@ final class EqualizerController: OutputEqualizing {
             logger.notice("Equalizer status: \(String(describing: status), privacy: .public)")
             report(status)
         }
+        engine.scheduleLayoutRetry = { [weak self] token in
+            self?.queue.asyncAfter(deadline: .now() + .milliseconds(750)) { [weak self] in
+                guard let self, engine.resumeLayoutRetry(token) else { return }
+                evaluate()
+            }
+        }
         let center = NSWorkspace.shared.notificationCenter
         for (name, sleeping) in [(NSWorkspace.willSleepNotification, true), (NSWorkspace.didWakeNotification, false)] {
             power.append(center.addObserver(forName: name, object: nil, queue: nil) { [weak self] _ in
