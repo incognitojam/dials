@@ -171,6 +171,14 @@ package struct EqualizerPlan: Sendable, BitwiseCopyable {
         droppedBandIndices = dropped
     }
 
+    @_noLocks
+    func matches(_ other: borrowing Self) -> Bool {
+        guard sampleRate == other.sampleRate, preampGain == other.preampGain,
+              compareGain == other.compareGain, sections.count == other.sections.count else { return false }
+        for i in 0..<sections.count where sections[i] != other.sections[i] { return false }
+        return true
+    }
+
     package func magnitudeDB(at frequencies: [Double]) -> [Double] {
         frequencies.map { magnitudeDB(at: $0) }
     }
