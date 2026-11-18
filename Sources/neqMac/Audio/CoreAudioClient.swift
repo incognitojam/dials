@@ -51,8 +51,12 @@ final class CoreAudioClient: AudioDeviceClient {
         removeListeners()
     }
 
+    static let equalizerAggregatePrefix = "dev.neqmac.eq.aggregate."
+
+    static func routable(uid: String) -> Bool { !uid.hasPrefix(equalizerAggregatePrefix) }
+
     func devices() throws -> [AudioDevice] {
-        let ids: [AudioObjectID] = try readArray(
+        let ids: [AudioObjectID] = try Self.readArray(
             objectID: systemObject,
             selector: kAudioHardwarePropertyDevices,
             scope: kAudioObjectPropertyScopeGlobal
@@ -63,7 +67,7 @@ final class CoreAudioClient: AudioDeviceClient {
                 objectID: id,
                 selector: kAudioDevicePropertyDeviceUID,
                 scope: kAudioObjectPropertyScopeGlobal
-            ) else {
+            ), Self.routable(uid: uid) else {
                 // Devices can remain in Core Audio's list briefly while being
                 // torn down. An object ID is not stable enough to persist.
                 return []
@@ -74,7 +78,7 @@ final class CoreAudioClient: AudioDeviceClient {
                 scope: kAudioObjectPropertyScopeGlobal
             )) ?? unknownDeviceName
             // Constrain the generic read inside try? so its storage is UInt32, not Optional<UInt32>.
-            let transport = (try? readScalar(
+            let transport = (try? Self.readScalar(
                 objectID: id,
                 selector: kAudioDevicePropertyTransportType,
                 scope: kAudioObjectPropertyScopeGlobal
@@ -113,7 +117,7 @@ final class CoreAudioClient: AudioDeviceClient {
         let selector = direction == .input
             ? kAudioHardwarePropertyDefaultInputDevice
             : kAudioHardwarePropertyDefaultOutputDevice
-        return try readScalar(
+        return try Self.readScalar(
             objectID: systemObject,
             selector: selector,
             scope: kAudioObjectPropertyScopeGlobal
@@ -121,7 +125,7 @@ final class CoreAudioClient: AudioDeviceClient {
     }
 
     func defaultSystemOutputDeviceID() throws -> AudioObjectID {
-        try readScalar(
+        try Self.readScalar(
             objectID: systemObject,
             selector: kAudioHardwarePropertyDefaultSystemOutputDevice,
             scope: kAudioObjectPropertyScopeGlobal
@@ -132,7 +136,7 @@ final class CoreAudioClient: AudioDeviceClient {
         let selector = device.direction == .input
             ? kAudioHardwarePropertyDefaultInputDevice
             : kAudioHardwarePropertyDefaultOutputDevice
-        try writeScalar(
+        try Self.writeScalar(
             device.audioObjectID,
             objectID: systemObject,
             selector: selector,
@@ -140,7 +144,7 @@ final class CoreAudioClient: AudioDeviceClient {
         )
 
         if device.direction == .output, includeSystemSounds {
-            try writeScalar(
+            try Self.writeScalar(
                 device.audioObjectID,
                 objectID: systemObject,
                 selector: kAudioHardwarePropertyDefaultSystemOutputDevice,
@@ -216,7 +220,7 @@ final class CoreAudioClient: AudioDeviceClient {
         return value as String
     }
 
-    private func readScalar<T>(
+    static func readScalar<T>(
         objectID: AudioObjectID,
         selector: AudioObjectPropertySelector,
         scope: AudioObjectPropertyScope
@@ -243,7 +247,7 @@ final class CoreAudioClient: AudioDeviceClient {
         return storage.load(as: T.self)
     }
 
-    private func readArray<T>(
+    static func readArray<T>(
         objectID: AudioObjectID,
         selector: AudioObjectPropertySelector,
         scope: AudioObjectPropertyScope
@@ -271,11 +275,11 @@ final class CoreAudioClient: AudioDeviceClient {
         guard status == noErr else {
             throw CoreAudioError.propertyRead(selector: selector, status: status)
         }
-        let buffer = UnsafeBufferPointer(start: storage.assumingMemoryBound(to: T.self), count: count)
+        let buffer = UnsafeBufferPointer(start: storage.assumingMemoryBound(to: T.self), count: min(count, Int(size) / MemoryLayout<T>.stride))
         return Array(buffer)
     }
 
-    private func writeScalar<T>(
+    static func writeScalar<T>(
         _ value: T,
         objectID: AudioObjectID,
         selector: AudioObjectPropertySelector,
