@@ -2,7 +2,16 @@
 
 import PackageDescription
 
+#if os(macOS)
+let excludedIOSources: [String] = []
+#else
+let excludedIOSources = ["EqualizerIO.c"]
+#endif
+
 var targets: [Target] = [
+    .target(name: "EqualizerIO", exclude: excludedIOSources),
+    .target(name: "FrameRingStress", dependencies: ["EqualizerIO"], path: "Tests/FrameRingStress"),
+    .testTarget(name: "EqualizerIOTests", dependencies: ["EqualizerIO", "FrameRingStress"]),
     .target(name: "RoutingCore"),
     .target(name: "BrightnessCore"),
     .target(name: "EqualizerCore", swiftSettings: [.unsafeFlags(["-O"], .when(configuration: .debug))]),
@@ -21,7 +30,6 @@ products += [
 ]
 targets += [
     .target(name: "DialsKit"),
-    .target(name: "EqualizerIO"),
     .executableTarget(name: "neqMac", dependencies: ["DialsKit", "RoutingCore", "EqualizerEngineCore", "EqualizerCore", "EqualizerIO"]),
     .executableTarget(name: "nitMac", dependencies: ["DialsKit", "BrightnessCore"]),
     .testTarget(name: "DialsKitTests", dependencies: ["DialsKit"]),
