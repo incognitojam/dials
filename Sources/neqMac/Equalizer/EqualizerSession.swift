@@ -3,13 +3,13 @@ import EqualizerCore
 import EqualizerEngineCore
 
 enum SessionStatus: Equatable {
-    case idle, starting, reconfiguring, running, failed(String), suspended(String)
+    case idle, starting, reconfiguring, restarting(String), running, failed(String), suspended(String)
 }
 
 protocol TapDevice: AnyObject {
     func createTap() throws
     func createAggregate() throws
-    func configure(_ profile: EQInfo, plan: EqualizerPlan) throws
+    func configure(_ profile: EQInfo, plan: EqualizerPlan) throws -> Double
     func createIO() throws
     func startIO() throws
     func destroyTap()
@@ -40,7 +40,7 @@ final class SessionGuard {
     static let callbackTolerance: TimeInterval = 0.350
     static let activityFreshness: TimeInterval = 0.250
     static let reconfigurationWindow: TimeInterval = 2
-    static let restartIO = SessionStatus.suspended("IO did not resume after reconfiguration")
+    static let verificationGrace: TimeInterval = 0.8
     private let lock = NSLock()
     private let device: TapDevice
     private var lastBeat: UInt64?
@@ -68,6 +68,8 @@ final class SessionGuard {
     }
 
     private var deadline: TimeInterval?
+    private var extended = false
+    private var verifying = false
     private var verified = false
     private var openingBeat: UInt64 = 0
     var recoveringIO = false
@@ -78,15 +80,18 @@ final class SessionGuard {
         guard ended == nil else { return }
         if deadline == nil {
             deadline = now + Self.reconfigurationWindow
+            extended = false
             openingBeat = device.heartbeat
         }
         verified = false
+        verifying = true
     }
 
-    func verifiedFormat() {
+    func verificationFinished(success: Bool) {
         lock.lock()
         defer { lock.unlock() }
-        verified = true
+        verifying = false
+        verified = success
     }
 
     func check(now: TimeInterval) -> SessionStatus? {
@@ -101,14 +106,21 @@ final class SessionGuard {
         }
         if let deadline {
             guard now >= deadline else { return nil }
+            let progressing = idle || (beat != openingBeat && now - since < Self.callbackTolerance)
+            if verifying && progressing && !extended && now < deadline + Self.verificationGrace {
+                extended = true
+                self.deadline = deadline + Self.verificationGrace
+                return nil
+            }
             self.deadline = nil
-            if verified && (idle || (beat != openingBeat && now - since < Self.callbackTolerance)) {
+            if verified && progressing {
                 return .running
             }
             release()
+            let reason = verified ? "Callbacks stale after reconfiguration" : "Tap layout not verified after reconfiguration"
             if device.removed { ended = .suspended("Device removed") }
-            else if recoveringIO && beat == 0 { ended = .failed("Rebuilt audio callback stalled") }
-            else { ended = Self.restartIO }
+            else if recoveringIO && beat == 0 { ended = .failed(reason) }
+            else { ended = .restarting(reason) }
             return ended
         }
         guard !idle, now - since >= Self.callbackTolerance else {
@@ -148,6 +160,7 @@ final class SessionGuard {
 final class EqualizerSession {
     private let backend: TapDevice
     let monitor: SessionGuard
+    fileprivate(set) var verifiedRate: Double?
     private var aggregate = false
     private var io = false
     private var activityPoll: DispatchSourceTimer?
@@ -160,36 +173,37 @@ final class EqualizerSession {
     }
 
     func start(profile: EQInfo, plan: EqualizerPlan, diagnostic: (String) -> Void) throws {
-        func timed(_ name: String, _ work: () throws -> Void) rethrows {
+        func timed<T>(_ name: String, _ work: () throws -> T) rethrows -> T {
             let start = DispatchTime.now().uptimeNanoseconds
             defer {
                 let ms = Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000
                 diagnostic(String(format: "%@: %.2f ms", name, ms))
             }
-            try work()
+            return try work()
         }
         try timed("Create tap", monitor.createTap)
         try timed("Create aggregate", backend.createAggregate)
         aggregate = true
-        try timed("Configure aggregate") { try backend.configure(profile, plan: plan) }
+        verifiedRate = try timed("Configure aggregate") { try backend.configure(profile, plan: plan) }
         try timed("Create IO proc", backend.createIO)
         io = true
         startAttempted = true
         try timed("Start IO", backend.startIO)
     }
 
-    func watch(on queue: DispatchQueue, ended: @escaping (EqualizerSession, SessionStatus) -> Void) {
+    func watch(on queue: DispatchQueue, now: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
+               ended: @escaping (EqualizerSession, SessionStatus) -> Void) {
         // HAL queries can wait behind IO. Keep them off the heartbeat thread and outside its lock.
         let poll = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "dev.neqmac.equalizer.activity"))
-        monitor.setPlaying(false)
-        poll.setEventHandler { [backend, monitor] in monitor.setPlaying(backend.otherProcessPlaying) }
+        monitor.setPlaying(false, at: now())
+        poll.setEventHandler { [backend, monitor] in monitor.setPlaying(backend.otherProcessPlaying, at: now()) }
         poll.schedule(deadline: .now(), repeating: .milliseconds(50))
         activityPoll = poll
         poll.resume()
         Thread.detachNewThread { [self] in
             Thread.current.name = "neqMac equalizer watchdog"
             while true {
-                let reason = autoreleasepool { monitor.check(now: ProcessInfo.processInfo.systemUptime) }
+                let reason = autoreleasepool { monitor.check(now: now()) }
                 if let reason {
                     queue.async { ended(self, reason) }
                     if reason != .running { return }
@@ -201,7 +215,7 @@ final class EqualizerSession {
 
     let verification = DispatchQueue(label: "dev.neqmac.equalizer.verify")
 
-    func update(profile: EQInfo, plan: EqualizerPlan) throws { try backend.configure(profile, plan: plan) }
+    func update(profile: EQInfo, plan: EqualizerPlan) throws -> Double { try backend.configure(profile, plan: plan) }
 
     func closeIO() {
         verification.sync {}
@@ -246,33 +260,39 @@ final class SessionEngine {
         return true
     }
 
-    func formatChanged(retrySettling: Bool = true) {
+    func formatChanged(announce: Bool = true, retrySettling: Bool = true) {
         guard let session, let applied else { return }
         session.monitor.formatChanged()
-        publish(.reconfiguring)
+        if announce { publish(.reconfiguring) }
         if checking { dirty = true; return }
         checking = true
         session.verification.async { [weak self] in
             let result = Result {
                 if session.removed { throw SessionError.deviceRemoved }
-                try session.update(profile: applied.profile, plan: applied.plan)
+                return try session.update(profile: applied.profile, plan: applied.plan)
             }
             self?.queue.async { [weak self] in
                 guard let self, self.session === session else { return }
                 checking = false
+                if case let .failure(error) = result {
+                    diagnostic("Tap verification failed · " + error.localizedDescription)
+                }
                 if case .failure(SessionError.deviceRemoved) = result {
                     finish(session, reason: .suspended("Device removed"))
                 } else if case .failure(SessionError.lowRate) = result {
                     finish(session, reason: .suspended(SessionError.lowRate.localizedDescription))
                 } else if dirty {
                     dirty = false
-                    formatChanged()
-                } else if case .success = result {
-                    session.monitor.verifiedFormat()
-                } else if retrySettling {
+                    formatChanged(announce: false)
+                } else if case let .success(rate) = result {
+                    session.verifiedRate = rate
+                    session.monitor.verificationFinished(success: true)
+                } else {
+                    session.monitor.verificationFinished(success: false)
+                    guard retrySettling else { return }
                     queue.asyncAfter(deadline: .now() + .milliseconds(50)) { [weak self] in
-                        guard let self, self.session === session, status == .reconfiguring, !checking else { return }
-                        formatChanged(retrySettling: false)
+                        guard let self, self.session === session, !checking else { return }
+                        formatChanged(announce: false, retrySettling: false)
                     }
                 }
             }
@@ -285,7 +305,7 @@ final class SessionEngine {
             if !checking { publish(.running) }
         } else {
             finish(old, reason: reason)
-            if status == SessionGuard.restartIO {
+            if case .restarting = status {
                 evaluate()
             }
         }
@@ -321,15 +341,15 @@ final class SessionEngine {
             return
         }
         do {
-            if session != nil {
-                guard applied?.profile != profile || applied?.plan.sampleRate != plan.sampleRate else { return }
+            if let session {
+                let rateChanged = session.verifiedRate != plan.sampleRate
+                guard applied?.profile != profile || rateChanged else { return }
                 applied = (profile, plan)
-                formatChanged()
+                formatChanged(announce: rateChanged)
             } else {
-                let recovering = status == SessionGuard.restartIO
-                publish(.starting)
                 let new = EqualizerSession(make(output))
-                new.monitor.recoveringIO = recovering
+                if case .restarting = status { new.monitor.recoveringIO = true }
+                publish(.starting)
                 session = new
                 try new.start(profile: profile, plan: plan, diagnostic: diagnostic)
                 applied = (profile, plan)

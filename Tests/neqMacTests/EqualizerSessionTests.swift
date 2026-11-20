@@ -1,3 +1,4 @@
+import os.lock
 import CoreAudio
 import EqualizerCore
 import EqualizerEngineCore
@@ -17,17 +18,24 @@ final class EqualizerSessionTests: XCTestCase {
         var removed: Bool { onRemovalRead?(); return deviceGone }
         var layoutMismatch = false
         var otherProcessPlaying: Bool? = false
-        var heartbeat: UInt64 = 0
+        var readBeat: (() -> UInt64)?
+        private var cycles: UInt64 = 0
+        var heartbeat: UInt64 {
+            get { readBeat?() ?? cycles }
+            set { cycles = newValue }
+        }
+        var negotiatedRate: Double?
         func step(_ name: String) throws {
             calls.append(name)
             if failure == name { throw TapError(message: name) }
         }
         func createTap() throws { try step("tap") }
         func createAggregate() throws { try step("aggregate") }
-        func configure(_ profile: EQInfo, plan: EqualizerPlan) throws {
+        func configure(_ profile: EQInfo, plan: EqualizerPlan) throws -> Double {
             try step("configure")
             rates.append(plan.sampleRate)
             onConfigure?()
+            return negotiatedRate ?? plan.sampleRate
         }
         func createIO() throws { try step("io") }
         func startIO() throws { try step("start") }
@@ -197,7 +205,7 @@ final class EqualizerSessionTests: XCTestCase {
             monitor.setPlaying(true)
             monitor.formatChanged(now: 0)
             XCTAssertNil(monitor.check(now: 0.65))
-            monitor.verifiedFormat()
+            monitor.verificationFinished(success: true)
             audio.heartbeat += 1
             if resume < 2 {
                 XCTAssertNil(monitor.check(now: resume))
@@ -222,11 +230,11 @@ final class EqualizerSessionTests: XCTestCase {
                 for tick in 0..<20 {
                     let now = Double(tick) / 10
                     old.monitor.formatChanged(now: now)
-                    old.monitor.verifiedFormat()
+                    old.monitor.verificationFinished(success: true)
                     XCTAssertNil(old.monitor.check(now: now))
                 }
                 let reason = try XCTUnwrap(old.monitor.check(now: 2.01))
-                XCTAssertEqual(reason, SessionGuard.restartIO)
+                XCTAssertEqual(reason, .restarting("Callbacks stale after reconfiguration"))
                 if failedBuild { audio.failure = "start" }
                 var attempts = 0
                 func restart() {
@@ -272,6 +280,122 @@ final class EqualizerSessionTests: XCTestCase {
         owner.sync {
             XCTAssertTrue(engine.session === old)
             XCTAssertEqual(audio.rates, [48_000, 96_000])
+        }
+    }
+
+    func testLateVerificationCanExtendOnlyOnce() throws {
+        for completes in [true, false] {
+            let audio = Backend()
+            let monitor = SessionGuard(audio)
+            monitor.setPlaying(true)
+            monitor.formatChanged(now: 0)
+            monitor.verificationFinished(success: true)
+            audio.heartbeat = 1
+            XCTAssertNil(monitor.check(now: 1.9))
+            monitor.formatChanged(now: 1.95)
+            XCTAssertNil(monitor.check(now: 2))
+            monitor.formatChanged(now: 2.75)
+            if completes { monitor.verificationFinished(success: true) }
+            audio.heartbeat += 1
+            XCTAssertEqual(monitor.check(now: 2 + SessionGuard.verificationGrace),
+                           completes ? .running : .restarting("Tap layout not verified after reconfiguration"))
+        }
+    }
+
+    func testVerificationFailureLogsHALReasonAndClassifiesExpiry() throws {
+        let owner = DispatchQueue(label: "test.verify-error")
+        var messages = [String]()
+        let engine = SessionEngine(queue: owner, diagnostic: { messages.append($0) }) { _ in }
+        let audio = Backend()
+        let session = try owner.sync {
+            engine.reconcile(desired, output: output) { _ in audio }
+            audio.failure = "configure"
+            engine.formatChanged(retrySettling: false)
+            return try XCTUnwrap(engine.session)
+        }
+        session.verification.sync {}
+        owner.sync {
+            XCTAssertTrue(messages.contains("Tap verification failed · configure"))
+            let reason = session.monitor.check(now: ProcessInfo.processInfo.systemUptime + 3)
+            XCTAssertEqual(reason, .restarting("Tap layout not verified after reconfiguration"))
+        }
+    }
+
+    func testReplacedVerificationCannotInterfereWithCurrentCheck() throws {
+        let owner = DispatchQueue(label: "test.replacement")
+        var diagnostics = [String]()
+        let engine = SessionEngine(queue: owner, diagnostic: { diagnostics.append($0) }) { _ in }
+        let old = Backend(), new = Backend()
+        let release = DispatchSemaphore(value: 0)
+        let replacement = try owner.sync {
+            engine.reconcile(desired, output: output) { _ in old }
+            let previous = try XCTUnwrap(engine.session)
+            old.failure = "configure"
+            engine.formatChanged()
+            previous.verification.sync {}
+            engine.finish(previous, reason: .idle)
+            engine.reconcile(desired, output: output) { _ in new }
+            new.onConfigure = { _ = release.wait(timeout: .now() + 3) }
+            engine.formatChanged()
+            return try XCTUnwrap(engine.session)
+        }
+        owner.sync {
+            engine.observed(replacement, .running) { XCTFail() }
+            XCTAssertEqual(engine.status, .reconfiguring)
+            engine.formatChanged()
+            XCTAssertFalse(diagnostics.contains("Tap verification failed · configure"))
+        }
+        release.signal()
+        replacement.verification.sync {}
+        owner.sync {}
+        release.signal()
+        replacement.verification.sync {}
+        owner.sync { XCTAssertEqual(new.rates.count, 3) }
+    }
+
+    func testRealWatchdogSurvivesMeasuredGapAndProfileEdit() throws {
+        let owner = DispatchQueue(label: "test.clock")
+        let audio = Backend()
+        audio.otherProcessPlaying = true
+        let resumed = expectation(description: "verified IO resumed")
+        let sampled = DispatchSemaphore(value: 0)
+        let clock = OSAllocatedUnfairLock(initialState: (time: 0.0, sampled: -1.0))
+        let start = ProcessInfo.processInfo.systemUptime
+        let now = { start + clock.withLock { $0.time } }
+        audio.readBeat = {
+            clock.withLock { state in
+                if state.time != state.sampled { state.sampled = state.time; sampled.signal() }
+                return state.time < 0.75 ? 0 : UInt64(state.time * 100)
+            }
+        }
+        var statuses = [SessionStatus]()
+        let engine = SessionEngine(queue: owner) { statuses.append($0) }
+        let session = try owner.sync {
+            engine.reconcile(desired, output: output) { _ in audio }
+            let session = try XCTUnwrap(engine.session)
+            engine.formatChanged()
+            return session
+        }
+        session.verification.sync {}
+        owner.sync {
+            session.watch(on: owner, now: now) { old, status in
+                engine.observed(old, status) { XCTFail("Unexpected rebuild") }
+                if status == .running { resumed.fulfill() }
+            }
+        }
+        for time in [0.5, 0.75, 2.1] {
+            clock.withLock { $0.time = time }
+            // Ignore a signal left by formatChanged's opening heartbeat read.
+            repeat {
+                guard sampled.wait(timeout: .now() + 2) == .success else { return XCTFail("Missing watchdog tick") }
+            } while clock.withLock({ $0.sampled != time })
+        }
+        wait(for: [resumed], timeout: 2)
+        try owner.sync {
+            let edited = EQInfo(author: "Another profile", parameters: profile.parameters)
+            engine.reconcile(.process(edited, try EqualizerPlan(edited.parameters, sampleRate: 48_000)), output: output) { _ in audio }
+            XCTAssertEqual(statuses, [.starting, .running, .reconfiguring, .running])
+            engine.finish(session, reason: .idle)
         }
     }
 
