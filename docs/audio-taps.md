@@ -380,12 +380,13 @@ every start, though that was not established. Capture delivers 512 frames at a t
 would explain why +256 and +512 land close together.
 
 Over that minute neither side logged an underrun or overrun. Capture callbacks, 5869 of
-them, recorded 512–1024 queued frames after writing, and playback callbacks recorded zero
-after reading. Capture and playback advanced at the same rate, which supports no
-measurable rate drift over this run; the tap-only aggregate runs on the headset's clock. The delay
-at the ear moved by about 0.5 ms between the first and last ten bursts. In one readable
-run with a continuous tone, starting the pipeline left about 15 ms of silence at the ear
-and stopping it 25–35 ms, twice each; a second such run was too noisy to read.
+them, recorded 512–1024 queued frames after writing, and playback callbacks recorded
+zero after reading. Capture and playback advanced at the same rate, which supports no
+measurable rate drift over this run; the tap-only aggregate runs on the headset's clock.
+The delay at the ear moved by about 0.5 ms between the first and last ten bursts. In one
+readable run with a continuous tone, starting the pipeline left about 15 ms of silence
+at the ear and stopping it 25–35 ms, twice each; a second such run was too noisy to
+read.
 
 ### Over-compensating crashed the audio server
 
