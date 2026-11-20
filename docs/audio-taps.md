@@ -319,16 +319,21 @@ aggregate, 8 bursts per row:
 | drift compensation off | +203.8 ms |
 | output sub-device's extra latency −8961 frames | +204.8 ms |
 
-The extra input latency moved the samples frame for frame: +512 frames is 11.6 ms. Nothing
-else in the table moved them. The value can only be given when the aggregate is created:
+The extra input latency moved the samples frame for frame: +512 frames is 11.6 ms. Neither
+output-latency setting moved the median; disabling drift compensation advanced it by about
+1 ms. The value can only be given when the aggregate is created:
 every property queried on the IDs in `kAudioAggregateDevicePropertySubTapList` of a running
 aggregate returned `'!obj'`.
 
 ### Two ways around it
 
 Both were measured at the ear against untapped playback in the same run, with bursts at
-−42 dBFS (−30 or −36 dBFS after the crash below reset the headset's volume) and the same
-burst analysis as above.
+−42 dBFS (−30 or −36 dBFS after the crash below reset the headset's volume). Arrivals are
+found as above, but each segment is reduced differently: its value is the median of the
+densest cluster of arrivals within ±5 ms, a segment needs at least two bursts in that
+cluster to count, and a tapped segment is compared with the mean of its neighbouring
+untapped segments, or with one of them if only one is usable. That rule decides which
+noisy cycles count in the split results.
 
 **Compensating inside the combined aggregate.** One run, 5 cycles of each setting, 15
 bursts each, no outliers:
@@ -340,10 +345,13 @@ bursts each, no outliers:
 | −8448 frames, 513 frames short of it | 35.92 ms (sd 0.05) |
 
 24.28 ms is the aggregate's two buffers (23.22 ms) plus about 1 ms. In a separate 24 s run
-at −8961 frames, all 2042 callbacks carried a full tone with no zero samples and a constant
-peak, and the tone at the ear never fell 6 dB below its untapped level in any of 4514
-5 ms blocks. Built mid-playback, it left about 15–20 ms of silence at the ear, and
-teardown about 15 ms (one build and one teardown).
+at −8961 frames, the log has 2062 callbacks; after the first 20, one of which carried
+slightly less than a full buffer of tone, all 2042 remaining carried a full tone with no
+zero samples and a constant peak. At the ear, in the analysis window starting 1.5 s after
+startup, the tone never fell 6 dB below its untapped level in any of 4514 5 ms blocks.
+Built mid-playback, it left a gap whose size depends on the smoothing: about 15–20 ms of
+silence with two-block smoothing, one 25 ms gap with four. Teardown left 10–15 ms. That is
+one build and one teardown.
 
 **Splitting capture from playback.** A private aggregate holding only the tap, muted when
 tapped, with drift compensation off, writes each callback into a preallocated
@@ -352,22 +360,29 @@ reading once a target fill is queued. Playback starting after one capture buffer
 
 | Queued before playback | Added at the ear | Cycles |
 | --- | ---: | ---: |
-| One capture buffer | 26.4, 29.5, 31.9 ms | 3 |
-| One capture buffer, separate one-minute run | 31.4 ms (sd 0.26, 40 bursts) | 1 |
-| +256 frames | 35.2–39.0 ms | 4 |
-| +512 frames | 38.3–46.5 ms | 3 |
-| +1024 frames | 49.7 ms | 1 |
+| Queued before playback | Added at the ear | Readable cycles | Retained bursts |
+| --- | ---: | ---: | ---: |
+| One capture buffer | 26.4, 29.5, 31.9 ms | 3 | 10 |
+| +256 frames | 35.2–39.0 ms | 4 | 11 |
+| +512 frames | 38.3–46.5 ms | 3 | 8 |
+| +1024 frames | 49.7 ms | 1 | 3 |
+| One capture buffer, separate one-minute run | 31.4 ms (sd 0.26) | 1 | 40 of 65 |
 
-The spread at one buffer is the phase between the two IOProcs, which differs on every
-start. Capture delivers 512 frames at a time, which is why +256 and +512 land close
-together. The sweep ran at a burst signal-to-noise ratio of 12.7 dB and lost 5 of its 16
-cycles to room noise. Three earlier attempts at the same sweep, at 10–11 dB, were too noisy
-to read at all and are not counted. The one-minute run kept 40 of 65 tapped bursts, the
-rest beaten by room noise, against one untapped reference before it.
+One sweep, at a median burst signal-to-noise ratio of 12.7 dB, supplied the first four
+rows; 11 of its 16 cycles contributed and the rest were lost to room noise. Three other
+recordings were too noisy to read at all, with median burst signal-to-noise ratios of
+10.1–10.9 dB, and are not counted: two attempted the same four-depth sweep and one was a
+single +512-frame run. The one-minute run kept 40 of its 65 tapped bursts, the rest beaten
+by room noise, against one untapped reference before it.
 
-Over that minute the ring logged no underrun or overrun in 5869 capture callbacks, its
-fill stayed between 512 and 1024 frames, and capture and playback advanced at the same
-rate: the tap-only aggregate runs on the headset's clock, so nothing drifted. The delay
+The spread at one buffer is plausibly the phase between the two IOProcs, which differs on
+every start, though that was not established. Capture delivers 512 frames at a time, which
+would explain why +256 and +512 land close together.
+
+Over that minute neither side logged an underrun or overrun. Capture callbacks, 5869 of
+them, recorded 512–1024 queued frames after writing, and playback callbacks recorded zero
+after reading. Capture and playback advanced at the same rate, which supports no
+measurable rate drift over this run; the tap-only aggregate runs on the headset's clock. The delay
 at the ear moved by about 0.5 ms between the first and last ten bursts. In one readable
 run with a continuous tone, starting the pipeline left about 15 ms of silence at the ear
 and stopping it 25–35 ms, twice each; a second such run was too noisy to read.
@@ -375,20 +390,22 @@ and stopping it 25–35 ms, twice each; a second such run was too noisy to read.
 ### Over-compensating crashed the audio server
 
 Once, an extra input latency of −9473 frames, 512 beyond the device's 8961, crashed
-`coreaudiod`. `AudioDeviceStart` returned `noErr`; about 100 ms later every device
-disappeared and the server restarted itself. The crash report shows a bus error
-(`EXC_BAD_ACCESS`, `KERN_PROTECTION_FAILURE`) in `memmove` under
-`HALS_DelayProcessor::Process`, on the aggregate's own IO thread. Every application lost
-its audio while the server restarted. Afterwards the headset's volume was 44 % instead of
-100 %, and the built-in speakers were muted at zero volume. The likeliest reading, an
+`coreaudiod`. `AudioDeviceStart` returned `noErr`; about 104 ms later the device count fell
+to zero, the server restarted itself, and devices began reappearing about 2.2 s after
+that. The crash report shows a bus error (`EXC_BAD_ACCESS`, `KERN_PROTECTION_FAILURE`) in
+`memmove` under `HALS_DelayProcessor::Process`, on the aggregate's own IO thread. The logs
+show a system-wide audio-service interruption; they do not record how each application
+recovered. Afterwards the headset's volume was 43.75 % instead of about 100 %, and the
+built-in speakers came back muted at zero volume. The likeliest reading, an
 inference, is that the compensation is a delay line inside the server and a net negative
 delay reads outside its buffer.
 
-That makes the compensated aggregate unsafe wherever a device's latency can fall while
-the aggregate runs, and the value cannot be changed once it is created. Bluetooth call
-mode is such a change, and another application triggers it by opening the microphone.
-What the server does when the latency falls under a running compensated aggregate was not
-tested, because the expected outcome is the same crash.
+The experiment established a crash at startup, not how the server handles a later change.
+Even so, it makes the compensated aggregate unsafe wherever a device's latency can fall
+while the aggregate runs, because the value cannot be changed once it is created.
+Bluetooth call mode is such a change, and another application triggers it by opening the
+microphone. What the server does when the latency falls under a running compensated
+aggregate was not tested: testing it risked another system-wide audio interruption.
 
 ### Rate changes keep the IOProc
 

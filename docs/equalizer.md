@@ -232,12 +232,14 @@ acceptability thresholds ITU-R BT.1359-1 gives for delayed sound.
 
 **Measured, cause.** The delay comes from combining the tap and the output in one
 aggregate, not from tapping. In a tap-only aggregate a burst's samples arrive within a few
-milliseconds of the player producing them; the combined aggregate holds them back by the
-headset's declared output latency, about 205 ms, before the output adds that latency again.
+milliseconds of the player producing them; the combined aggregate hands them over about
+205 ms later, close to the headset's declared 203.2 ms output latency, before the output
+adds that latency again.
 
 **Measured, two ways around it.** A split pipeline — a tap-only aggregate capturing into a
 lock-free ring, read by a separate IOProc directly on the headset — added 26–32 ms at the
-ear on this headset, steady over a one-minute run with no underruns. With that, the
+ear on this headset in three readable one-buffer cycles of one sweep, with 31.4 ms in a
+separate one-minute run that logged no underruns or overruns. With that, the
 predicted lip-sync offset becomes about 30 ms, below the BT.1359-1 detectability figure;
 that too is a prediction until a real player is tested. Compensating inside the combined
 aggregate with the sub-tap's extra input latency achieved about 24 ms, but it is **not to
@@ -523,7 +525,7 @@ state.
 | E2, Bluetooth | One power-off and two software disconnects left the IOProc running with silent input and no error; the loss arrived as notifications. The speakers the audio moved to were not muted. The orphaned aggregate re-adopted the reconnected headset; in the cup, audio played to it was normal, neither muted nor doubled, in 4 of 4 runs. | Unplugging a USB DAC while tapped |
 | E3 | A rate change left 108–184 ms between callbacks and the IOProc resumed at the new rate; the call profile changed the channel count and buffer size. Recompile while the device stays eligible, never rebuild. In the cup, a tap kept through call mode dropped out about once a second and leaked 35–50 ms of unprocessed audio when the call ended. | Repeat on a USB DAC |
 | E5 | Ending the process without teardown released the mute in all 11 runs, and no tap or aggregate was left after any of the 15. A frozen process kept the output silent while stopped; a stuck callback kept it silent until the tap was destroyed, while `AudioDeviceStop` waited 2.5 s behind it. | Repeat on a USB DAC |
-| E8 | In the cup, the combined aggregate added 227.5 ms at the ear on Bluetooth at the default buffer (sd 0.14 and 0.07 ms over 12 and 8 cycles in two runs) and 215.9 ms at 256 frames. Cause, from timestamps: a tap-only aggregate receives a burst about 6 ms after the player produces it, the combined aggregate about 211 ms after, held back by the headset's declared latency. A split pipeline (tap-only capture, ring, separate output IOProc) added 26–32 ms at the ear, 31.4 ms over a minute with no underruns. Compensating with the sub-tap's extra input latency gave 24.3 ms, but over-compensating by 512 frames crashed `coreaudiod` once. Sound lagging picture is predicted from these, not measured. | Moved to E16 |
+| E8 | In the cup, the combined aggregate added 227.5 ms at the ear on Bluetooth at the default buffer (sd 0.14 and 0.07 ms over 12 and 8 cycles in two runs) and 215.9 ms at 256 frames. Cause, from timestamps: a tap-only aggregate receives a burst about 6 ms after the player produces it, the combined aggregate about 211 ms after, a shift of about 205 ms close to the headset's declared 203.2 ms. A split pipeline (tap-only capture, ring, separate output IOProc) added 26–32 ms at the ear in three readable one-buffer cycles of one sweep, with 31.4 ms in a separate one-minute run that logged no underruns or overruns. Compensating with the sub-tap's extra input latency gave 24.3 ms, but over-compensating by 512 frames crashed `coreaudiod` once. Sound lagging picture is predicted from these, not measured. | Moved to E16 |
 | E7 | Paused and silent players send exact zeros while running output; an idle tap gets no callbacks. Zeros are not a failure signal. | None for the decision |
 
 ### Open
