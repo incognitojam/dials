@@ -189,13 +189,14 @@ Transport decides eligibility first; only an eligible output can be assigned any
 | --- | --- |
 | USB | From milestone 2 |
 | Built-in | From milestone 3, through a pasted or hand-made profile |
-| Bluetooth | Not until the open decision below is made |
+| Bluetooth | Not until the split pipeline below is built and tested |
 | AirPlay, HDMI and DisplayPort | Not until E10 and E13 say how a tap behaves on them (milestone 8) |
 | Virtual devices and aggregates | Never. Loopback and recording devices would capture equalized audio, and aggregates include neqMac's own |
 
 So a soundbar or display connected over HDMI or DisplayPort cannot be assigned a profile
-until milestone 8, whatever kind of device it is. Bluetooth is held back by an open
-decision, described in [Bluetooth adds a quarter of a second](#bluetooth-adds-a-quarter-of-a-second).
+until milestone 8, whatever kind of device it is. Bluetooth is held back until the engine
+moves to the split pipeline described in
+[Bluetooth delay and the split pipeline](#bluetooth-delay-and-the-split-pipeline).
 
 Among eligible outputs, the kind of device decides only what neqMac offers:
 
@@ -218,34 +219,58 @@ unprocessed audio at the ear when the call ended
 
 A device with more than two channels gets the same chain on every channel.
 
-### Bluetooth adds a quarter of a second
+### Bluetooth delay and the split pipeline
 
-Measured with a microphone in the earcup of a WH-1000XM4: on this headset a tap added
-about 227 ms at the ear at the default buffer, and 216 ms at the smallest buffer the
-aggregate granted. That fits the headset's declared latency being traversed a second
-time, plus two aggregate buffers. The headset's reported output latency did not change,
-so a player relying on that property has no indication to delay the picture further, and
-players never see the aggregate. If playback was in sync before enabling EQ, we would
-expect sound to lag picture by about 227 ms afterwards (predicted; no picture or video
-player was measured). That offset would be past the 125 ms at which ITU-R BT.1359-1 puts
-the detectability of delayed sound, and past its 185 ms acceptability threshold, and the
-engine has no setting that would let players correct for it. The figures and their
-sources are in
-[On Bluetooth the tap adds a second device latency](audio-taps.md#on-bluetooth-the-tap-adds-a-second-device-latency).
+**Measured, current engine.** With a microphone in the earcup of a WH-1000XM4, the engine's
+combined aggregate added about 227 ms at the ear at the default buffer, and 216 ms at the
+smallest buffer the aggregate granted. The headset's reported output latency did not
+change, so a player relying on that property has no indication to delay the picture
+further, and players never see the aggregate. If playback was in sync before enabling EQ,
+we would expect sound to lag picture by about 227 ms afterwards (predicted; no picture or
+video player was measured), past both the 125 ms detectability and the 185 ms
+acceptability thresholds ITU-R BT.1359-1 gives for delayed sound.
 
-**Open product decision, not decided:** whether to offer the equalizer on Bluetooth at
-all. The options are:
+**Measured, cause.** The delay comes from combining the tap and the output in one
+aggregate, not from tapping. In a tap-only aggregate a burst's samples arrive within a few
+milliseconds of the player producing them; the combined aggregate holds them back by the
+headset's declared output latency, about 205 ms, before the output adds that latency again.
 
-- **(a) Not offered.** Bluetooth outputs stay ineligible.
-- **(b) An explicit opt-in** per device, with a visible warning that it "delays audio by
-  about a quarter of a second; fine for music, not for video".
-- **(c) An approach without a tap** for these devices, each needing its own
-  investigation. One is driving the headset's own equalizer over its control channel:
-  coarse bands, but no added delay. The other is a virtual output device that reports the
-  combined latency to players, the approach [System audio taps](audio-taps.md) set aside
-  for other reasons.
+**Measured, two ways around it.** A split pipeline — a tap-only aggregate capturing into a
+lock-free ring, read by a separate IOProc directly on the headset — added 26–32 ms at the
+ear on this headset, steady over a one-minute run with no underruns. With that, the
+predicted lip-sync offset becomes about 30 ms, below the BT.1359-1 detectability figure;
+that too is a prediction until a real player is tested. Compensating inside the combined
+aggregate with the sub-tap's extra input latency achieved about 24 ms, but it is **not to
+be used**: a setting 512 frames beyond the device's latency crashed the system audio
+server, the value is fixed when the aggregate is created, and a device's latency can fall
+while it runs, as in Bluetooth call mode. The figures are in
+[The delay comes from combining the tap and the output](audio-taps.md#the-delay-comes-from-combining-the-tap-and-the-output)
+and the sections after it.
 
-Until that is decided, Bluetooth outputs are not eligible.
+**The intended direction, not yet built:** move the engine to the split pipeline. That
+changes how the engine captures on every device, not only on Bluetooth: capture through a
+private tap-only aggregate, transfer through a preallocated single-producer,
+single-consumer ring, and play through an IOProc on the output device itself. The ring
+needs atomics that work on macOS 14, which the app keeps as its minimum; the experiment's
+ring used `Synchronization.Atomic`, which needs macOS 15. The teardown order, the
+watchdog and the failure rules above were measured on the combined aggregate and need to
+be re-established for two IOProcs.
+
+Bluetooth stays ineligible until the split pipeline is built and these are tested on it:
+call mode, rate and format changes, reconnection, sleep and wake, the headset's 256-frame
+buffer, runs of 30 minutes or more, behaviour on USB and built-in outputs, a lip-sync
+check with a real video player, and runs with the headset's noise cancelling and upscaler
+in a known state.
+
+**Alternatives considered.** Before the cause was found, this document recorded an open
+product decision between not offering Bluetooth EQ, an explicit opt-in with a warning
+that it "delays audio by about a quarter of a second; fine for music, not for video",
+driving the headset's own equalizer over its control channel (coarse bands, no added
+delay), and a virtual output device that reports the combined latency to players, the
+approach [System audio taps](audio-taps.md) set aside for other reasons. That framing is
+superseded by this result. The split pipeline is the recommended path; the owner has not
+been asked to choose between it and those alternatives, which stay recorded in case it
+fails.
 
 ## The engine
 
@@ -335,8 +360,8 @@ Turning EQ off for a device, with its switch, the master switch or by choosing *
 equalizer*, **tears the tap down** (decided). A running tap costs latency (measured: on
 wired outputs two buffer periods plus the device's safety offsets, and on USB,
 acoustically, about 2.3 ms more than the timestamps report; on a Bluetooth headset about
-227 ms at the ear), a permission, a wakeup on every cycle, and a way to make
-the Mac silent. None of that is worth paying to apply no filter.
+227 ms at the ear with the combined aggregate), a permission, a wakeup on every cycle,
+and a way to make the Mac silent. None of that is worth paying to apply no filter.
 
 Building or tearing down a tap did not leave a silent gap on the speakers. The original
 and the marker that stood in for the processed copy overlapped for up to about 45 ms.
@@ -465,8 +490,9 @@ session and renderer, and app integration. Each layer includes its tests.
 3. **Assigning profiles in the app.** The Equalizer pane, importing a pasted AutoEq block,
    per-device on/off and the master switch, permission onboarding, status display, Retry,
    compare, the USB "What's plugged in?" question and its menu bar quick switch, built-in
-   outputs, and Bluetooth only if the open decision in
-   [Bluetooth adds a quarter of a second](#bluetooth-adds-a-quarter-of-a-second) allows it.
+   outputs, and Bluetooth once the engine runs the split pipeline described in
+   [Bluetooth delay and the split pipeline](#bluetooth-delay-and-the-split-pipeline) and it
+   has been tested there.
 4. **The OPRA catalogue.** Fetching, caching and searching it, variant grouping, copying a
    profile on assignment, the attribution, and name-match suggestions with their
    dismissal.
@@ -497,7 +523,7 @@ state.
 | E2, Bluetooth | One power-off and two software disconnects left the IOProc running with silent input and no error; the loss arrived as notifications. The speakers the audio moved to were not muted. The orphaned aggregate re-adopted the reconnected headset; in the cup, audio played to it was normal, neither muted nor doubled, in 4 of 4 runs. | Unplugging a USB DAC while tapped |
 | E3 | A rate change left 108–184 ms between callbacks and the IOProc resumed at the new rate; the call profile changed the channel count and buffer size. Recompile while the device stays eligible, never rebuild. In the cup, a tap kept through call mode dropped out about once a second and leaked 35–50 ms of unprocessed audio when the call ended. | Repeat on a USB DAC |
 | E5 | Ending the process without teardown released the mute in all 11 runs, and no tap or aggregate was left after any of the 15. A frozen process kept the output silent while stopped; a stuck callback kept it silent until the tap was destroyed, while `AudioDeviceStop` waited 2.5 s behind it. | Repeat on a USB DAC |
-| E8 | In the cup, a tap added 227.5 ms at the ear on Bluetooth at the default buffer (sd 0.14 and 0.07 ms over 12 and 8 cycles in two runs) and 215.9 ms at 256 frames, which fits the headset's declared latency a second time plus two aggregate buffers. A global tap was no better in its one run. The headset's reported latency did not change, so a player relying on it has no indication to delay the picture; sound lagging picture by about 227 ms is predicted, not measured. | A lip-sync check with a real video player; a repeat with noise cancelling and the upscaler explicitly off |
+| E8 | In the cup, the combined aggregate added 227.5 ms at the ear on Bluetooth at the default buffer (sd 0.14 and 0.07 ms over 12 and 8 cycles in two runs) and 215.9 ms at 256 frames. Cause, from timestamps: a tap-only aggregate receives a burst about 6 ms after the player produces it, the combined aggregate about 211 ms after, held back by the headset's declared latency. A split pipeline (tap-only capture, ring, separate output IOProc) added 26–32 ms at the ear, 31.4 ms over a minute with no underruns. Compensating with the sub-tap's extra input latency gave 24.3 ms, but over-compensating by 512 frames crashed `coreaudiod` once. Sound lagging picture is predicted from these, not measured. | Moved to E16 |
 | E7 | Paused and silent players send exact zeros while running output; an idle tap gets no callbacks. Zeros are not a failure signal. | None for the decision |
 
 ### Open
@@ -517,3 +543,4 @@ USB outputs; several can use that branch's build.
 | E13 | A soundbar over HDMI at 5.1: what layout does the tap deliver, and does one chain per channel sound right? | Multichannel outputs | 8 |
 | E14 | Does the tap's added latency appear in `kAudioDevicePropertyLatency` on a wired output, where video players would read it? On Bluetooth it does not: the headset reported the same latency tapped and untapped. | Lip-sync on wired outputs | 8 |
 | E15 | Which call blocks while the first prompt is unanswered, and does it always clear when the user answers? Once, a build waited 41.5 s and completed after the prompt was answered, but the wait came before `AudioDeviceStart`. Does the session need a timeout and a cancel path? | The session queue's design | 2 |
+| E16 | The split pipeline, once built into the engine: call mode, rate and format changes, reconnection, sleep and wake, the headset's 256-frame buffer, runs of 30 minutes or more with ring fill and dropouts logged, behaviour on USB and built-in outputs, a lip-sync check with a real video player, and the headset's noise cancelling and upscaler in a known state | Whether the engine moves to it, and whether Bluetooth becomes eligible | Bluetooth |

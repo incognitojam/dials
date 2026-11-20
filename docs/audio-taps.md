@@ -94,8 +94,8 @@ internal figure as a lower bound.
 
 On Bluetooth these internal figures are not the whole cost. The headset declares 8961
 frames of latency, about 203 ms; in these in-cup runs an untapped control measured
-248.7 ms acoustically end to end; and a later acoustic measurement found a tap adding
-about 227 ms there, as
+248.7 ms acoustically end to end; and a later acoustic measurement found the combined
+aggregate adding about 227 ms there, as
 [On Bluetooth the tap adds a second device latency](#on-bluetooth-the-tap-adds-a-second-device-latency)
 records.
 
@@ -223,10 +223,10 @@ peak, gives the same differences to within 0.15 ms.
 
 The added delay matches the headset's declared output latency (8961 frames, 203.2 ms)
 plus the aggregate's two buffers (23.2 ms at 512 frames, 11.6 ms at 256), plus about
-1 ms. That fits the tap delivering the mix as the headset will present it and the
-aggregate then sending it through the headset's latency a second time, and the aggregate
-reports an input latency of 8961 frames for the tap. The internal scheduling itself was
-not observed.
+1 ms, and the aggregate reports an input latency of 8961 frames for the tap: the
+headset's latency is traversed a second time.
+[The delay comes from combining the tap and the output](#the-delay-comes-from-combining-the-tap-and-the-output)
+locates where: the aggregate holds the tap's samples back by that latency.
 
 A global tap captured no earlier. In its single run it delivered 48 kHz and added about
 1 ms more than the device tap; the cause was not isolated. When 64 frames were requested
@@ -283,6 +283,112 @@ buffer's input timestamp was 197.3–197.4 ms after the player's output timestam
 reached the IOProc 209.2 ms after. That is close to the headset's declared latency of
 203 ms. A tap built under a headset stream that was already playing delivered 17
 callbacks of exact zeros first, about 197 ms, in both runs.
+
+### The delay comes from combining the tap and the output
+
+A follow-up on the same headset and rig located where the 227 ms is spent. The tap has
+the audio almost at once; an aggregate that also contains the output device holds the
+tap's samples back by the device's declared output latency before handing them over. The
+delay is a property of combining the tap and its output in one aggregate, not of tapping.
+
+The tapping process recorded, for each burst, the input timestamp of the first sample
+over a threshold and the time its callback received it, both relative to the player's
+output timestamp. Callbacks wrote silence, so these were measured from timestamps, not
+at the ear. 15 bursts per row:
+
+| Aggregate | Muted when tapped | Sample timestamp | Callback receives it |
+| --- | --- | ---: | ---: |
+| Tap only, no output sub-device | no | +0.5 ms | +6.0 ms (0.7–12.1) |
+| Tap only, no output sub-device | yes | +0.5 ms | +6.0 ms (1.4–11.7) |
+| Tap and output device | no | +204.8 ms | +211.1 ms (205.8–216.1) |
+| Tap and output device | yes | +204.9 ms | +211.4 ms (205.6–216.6) |
+
+The 0.5 ms is the burst's own rise to the threshold. In the combined aggregate the same
+samples arrive about 205 ms later, close to the headset's declared 203.2 ms.
+
+The alignment is controlled by the sub-tap's extra input latency
+(`kAudioSubTapExtraInputLatencyKey`) in the aggregate's tap list. In the combined
+aggregate, 8 bursts per row:
+
+| Setting | Sample timestamp |
+| --- | ---: |
+| none | +204.8 ms |
+| extra input latency +512 frames | +216.5 ms |
+| extra input latency −8961 frames | +1.6 ms |
+| extra output latency −8961 frames | +204.8 ms |
+| drift compensation off | +203.8 ms |
+| output sub-device's extra latency −8961 frames | +204.8 ms |
+
+The extra input latency moved the samples frame for frame: +512 frames is 11.6 ms. Nothing
+else in the table moved them. The value can only be given when the aggregate is created:
+every property queried on the IDs in `kAudioAggregateDevicePropertySubTapList` of a running
+aggregate returned `'!obj'`.
+
+### Two ways around it
+
+Both were measured at the ear against untapped playback in the same run, with bursts at
+−42 dBFS (−30 or −36 dBFS after the crash below reset the headset's volume) and the same
+burst analysis as above.
+
+**Compensating inside the combined aggregate.** One run, 5 cycles of each setting, 15
+bursts each, no outliers:
+
+| Extra input latency | Added at the ear |
+| --- | ---: |
+| none | 227.50 ms (sd 0.04) |
+| −8961 frames, the device's latency | 24.28 ms (sd 0.05) |
+| −8448 frames, 513 frames short of it | 35.92 ms (sd 0.05) |
+
+24.28 ms is the aggregate's two buffers (23.22 ms) plus about 1 ms. In a separate 24 s run
+at −8961 frames, all 2042 callbacks carried a full tone with no zero samples and a constant
+peak, and the tone at the ear never fell 6 dB below its untapped level in any of 4514
+5 ms blocks. Built mid-playback, it left about 15–20 ms of silence at the ear, and
+teardown about 15 ms (one build and one teardown).
+
+**Splitting capture from playback.** A private aggregate holding only the tap, muted when
+tapped, with drift compensation off, writes each callback into a preallocated
+single-producer, single-consumer ring. A second IOProc, directly on the headset, starts
+reading once a target fill is queued. Playback starting after one capture buffer:
+
+| Queued before playback | Added at the ear | Cycles |
+| --- | ---: | ---: |
+| One capture buffer | 26.4, 29.5, 31.9 ms | 3 |
+| One capture buffer, separate one-minute run | 31.4 ms (sd 0.26, 40 bursts) | 1 |
+| +256 frames | 35.2–39.0 ms | 4 |
+| +512 frames | 38.3–46.5 ms | 3 |
+| +1024 frames | 49.7 ms | 1 |
+
+The spread at one buffer is the phase between the two IOProcs, which differs on every
+start. Capture delivers 512 frames at a time, which is why +256 and +512 land close
+together. The sweep ran at a burst signal-to-noise ratio of 12.7 dB and lost 5 of its 16
+cycles to room noise. Three earlier attempts at the same sweep, at 10–11 dB, were too noisy
+to read at all and are not counted. The one-minute run kept 40 of 65 tapped bursts, the
+rest beaten by room noise, against one untapped reference before it.
+
+Over that minute the ring logged no underrun or overrun in 5869 capture callbacks, its
+fill stayed between 512 and 1024 frames, and capture and playback advanced at the same
+rate: the tap-only aggregate runs on the headset's clock, so nothing drifted. The delay
+at the ear moved by about 0.5 ms between the first and last ten bursts. In one readable
+run with a continuous tone, starting the pipeline left about 15 ms of silence at the ear
+and stopping it 25–35 ms, twice each; a second such run was too noisy to read.
+
+### Over-compensating crashed the audio server
+
+Once, an extra input latency of −9473 frames, 512 beyond the device's 8961, crashed
+`coreaudiod`. `AudioDeviceStart` returned `noErr`; about 100 ms later every device
+disappeared and the server restarted itself. The crash report shows a bus error
+(`EXC_BAD_ACCESS`, `KERN_PROTECTION_FAILURE`) in `memmove` under
+`HALS_DelayProcessor::Process`, on the aggregate's own IO thread. Every application lost
+its audio while the server restarted. Afterwards the headset's volume was 44 % instead of
+100 %, and the built-in speakers were muted at zero volume. The likeliest reading, an
+inference, is that the compensation is a delay line inside the server and a net negative
+delay reads outside its buffer.
+
+That makes the compensated aggregate unsafe wherever a device's latency can fall while
+the aggregate runs, and the value cannot be changed once it is created. Bluetooth call
+mode is such a change, and another application triggers it by opening the microphone.
+What the server does when the latency falls under a running compensated aggregate was not
+tested, because the expected outcome is the same crash.
 
 ### Rate changes keep the IOProc
 
