@@ -23,6 +23,7 @@ private struct PlanChange {
 
 struct RenderContext: ~Copyable {
     private var lock = os_unfair_lock()
+    private var revision: UInt64 = 0
     private var pending: PlanChange?
     private var replacement: UnsafeMutablePointer<RenderBank>?
     private var retired: UnsafeMutablePointer<RenderBank>?
@@ -47,9 +48,11 @@ struct RenderContext: ~Copyable {
     }
 
     // Use field pointers so publisher and callback never open overlapping Swift accesses to self.
-    static func publish(_ p: UnsafeMutablePointer<Self>, plan: EqualizerPlan, channels: Int, layout: EQInputLayout) {
+    @discardableResult
+    static func publish(_ p: UnsafeMutablePointer<Self>, plan: EqualizerPlan, channels: Int, layout: EQInputLayout, revision: UInt64? = nil) -> Bool {
         os_unfair_lock_lock(&p.pointee.lock)
         defer { os_unfair_lock_unlock(&p.pointee.lock) }
+        if let revision, revision != p.pointee.revision { return false }
         if let old = p.pointee.retired {
             old.deinitialize(count: 1)
             old.deallocate()
@@ -66,13 +69,18 @@ struct RenderContext: ~Copyable {
             p.pointee.configuredChannels = channels
         }
         p.pointee.pending = PlanChange(plan: plan, mode: .processing, layout: layout)
+        return true
     }
 
-    static func invalidate(_ p: UnsafeMutablePointer<Self>) {
+    @discardableResult
+    static func invalidate(_ p: UnsafeMutablePointer<Self>) -> UInt64 {
         os_unfair_lock_lock(&p.pointee.lock)
+        p.pointee.revision &+= 1
+        let revision = p.pointee.revision
         p.pointee.pending = nil
         EQPermitRender(p.pointee.meter, false)
         os_unfair_lock_unlock(&p.pointee.lock)
+        return revision
     }
 
     @_optimize(speed)

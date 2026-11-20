@@ -105,7 +105,9 @@ final class TapLayoutTests: XCTestCase {
         for reverified in [false, true] {
             let samples = try run(layout, [Buffer(2, 0.1)], [Buffer(2, 7)]) { p, plan in
                 RenderContext.publish(p, plan: plan, channels: 2, layout: layout)
+                let stale = RenderContext.invalidate(p)
                 RenderContext.invalidate(p)
+                XCTAssertFalse(RenderContext.publish(p, plan: plan, channels: 2, layout: layout, revision: stale))
                 if reverified { RenderContext.publish(p, plan: plan, channels: 2, layout: layout) }
             }
             XCTAssertEqual(samples[0].last, reverified ? 0.1 : 0)

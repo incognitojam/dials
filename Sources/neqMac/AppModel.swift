@@ -45,9 +45,14 @@ final class AppModel: ObservableObject {
         equalizer.settled(output: devices.first { $0.direction == .output && $0.audioObjectID == id })
     }
 
+    private var lastEqualizerStatus: SessionStatus = .idle
+
     private func equalizerChanged(_ status: SessionStatus) {
+        defer { lastEqualizerStatus = status }
         switch status {
         case .starting, .idle: break
+        case .reconfiguring: appendEvent("Equalizer reconfiguring", level: .info)
+        case .running where lastEqualizerStatus == .reconfiguring: break
         case .running: appendEvent("Equalizer applied", level: .success)
         case .suspended(let reason): appendEvent("Equalizer suspended · " + reason, level: .warning)
         case .failed(let reason): appendEvent("Equalizer failed · " + reason, level: .warning)
