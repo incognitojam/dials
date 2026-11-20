@@ -33,15 +33,16 @@ keep working, and there is no driver to install.
 Excluding neqMac's own process from the tap is what stops the processed output being
 captured again as input.
 
-## It needs two permissions, and fails silently without either
+## System audio capture permission
 
-A tap requires `kTCCServiceMicrophone` to be created and `kTCCServiceAudioCapture` to
-deliver samples. Both usage strings must be present in `Info.plist`:
+On one Mac running macOS 27.0.1, neqMac started with microphone and system audio
+capture access both undecided. Only the system-audio-capture prompt appeared.
+After Allow, the tap delivered the USB output mix with microphone access still
+undecided. The bundle included both `NSAudioCaptureUsageDescription` and
+`NSMicrophoneUsageDescription`. This run did not test omitting the microphone
+usage string, denying capture, or leaving the prompt unanswered.
 
-- `NSMicrophoneUsageDescription`
-- `NSAudioCaptureUsageDescription`
-
-Miss the second one and the system refuses to even ask:
+In the earlier spike, omitting the audio-capture usage string prevented the prompt:
 
 ```
 Refusing authorization request for service kTCCServiceAudioCapture ...
@@ -60,8 +61,7 @@ app has one way to mute the machine and no way to notice; how a missing or revok
 permission can be detected is still open.
 
 The permission attaches to the signing identity, so build with a stable `neqMac Local`
-certificate, as described in [Signing](development.md#signing). An ad-hoc rebuild drops
-both grants.
+certificate, as described in [Signing](development.md#signing). An ad-hoc rebuild can require fresh authorization.
 
 ## It must be a signed bundle that is its own responsible process
 

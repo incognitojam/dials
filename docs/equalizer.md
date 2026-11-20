@@ -386,16 +386,10 @@ and its release go through the processor's crossfade, which reduces switching ar
 
 ### Permission
 
-The tap needs two permissions, microphone and system audio capture, and both usage
-strings must be in neqMac's `Info.plist` (measured). A user who only routes must never
-see either prompt, so neqMac never asks at launch; the first request follows the user
-action described in [Desired processing and session
-status](#desired-processing-and-session-status). There appears to be no public way to
-check audio-capture authorisation in advance, and what happens when it is revoked
-mid-session is unknown; E6 answers both. On one fresh signing identity, building a
-session took 41.5 s while the prompt was on screen and completed once it was answered;
-the logged `AudioDeviceStart` took 0.118 ms, so the wait came before it, and which call
-blocked is not known.
+An enabled assignment authorizes the capture request as described in
+[Desired processing and session status](#desired-processing-and-session-status).
+See [System audio capture permission](audio-taps.md#system-audio-capture-permission)
+for the observed grant and silent failure modes. Revocation remains open (E6).
 
 ### Failure
 
@@ -536,12 +530,58 @@ state.
 | E8 | In the cup, the combined aggregate added 227.5 ms at the ear on Bluetooth at the default buffer (sd 0.14 and 0.07 ms over 12 and 8 cycles in two runs) and 215.9 ms at 256 frames. Cause, from timestamps: a tap-only aggregate receives a burst about 6 ms after the player produces it, the combined aggregate about 211 ms after, a shift of about 205 ms close to the headset's declared 203.2 ms. A split pipeline (tap-only capture, ring, separate output IOProc) added 26–32 ms at the ear in three readable one-buffer cycles of one sweep, with 31.4 ms in a separate one-minute run that logged no underruns or overruns. Compensating with the sub-tap's extra input latency gave 24.3 ms, but over-compensating by 512 frames crashed `coreaudiod` once. Sound lagging picture is predicted from these, not measured. | Moved to E16 |
 | E7 | Paused and silent players send exact zeros while running output; an idle tap gets no callbacks. Zeros are not a failure signal. | None for the decision |
 
-### Open
+### USB output on macOS 27.0.1
 
-None of these questions has been answered. Milestone 2 merged before its hardware run, so
-the engine that equalizes USB outputs is on `main` without it. E4, E6 and E15, and the USB
-repeats of E1, E2 (unplugging a USB DAC while tapped), E3 and E5 above, are that run, and
-the next neqMac release should wait for them. They can use a build of `main`.
+One DAC exposed its microphone and output as separate Core Audio devices. The
+output had one stereo stream and no input streams. The merged engine at
+`05ebc0a` stayed idle: it requested a five-byte default-output ID. The following
+runs used the same build with four scalar reads corrected locally.
+
+- **Selection and startup.** The sole tap input retained its stream ID across
+  attachment and idle rate changes. At 48 kHz it was interleaved Float32 stereo,
+  starting at channel 1, with a 512-frame IO buffer and verified tap-only mask.
+  A warm file-triggered build took about 57 ms. During the first grant,
+  `AudioDeviceCreateIOProcID` took 2,178 ms, including the operator's time to
+  click Allow. The other steps took under 23 ms each.
+- **Acoustic response.** A microphone between closed headphone cups recorded
+  −36 dBFS tones. With a 1 kHz, 12 dB/octave low-pass and −12 dB gain, measured
+  changes at 250 Hz and 1 kHz were approximately −11.5 and −14.7 dB (design
+  −12.0 and −15.0). At 4 and 8 kHz the estimates were noise-limited: at least
+  31 dB and about 41 dB attenuation (design 36.5 and 49.8). Across three
+  switches, enabling produced a 10–20 ms dip, disabling about 40 ms. No
+  high-frequency burst stood out in the 10 ms analysis windows. The processed
+  level arrived about 270 ms after saving the file on one enable.
+- **Clock changes.** The DAC went quiet for 0.70–0.78 s with or without EQ. In
+  three playing transitions (48→44.1, 48→96, 96→48 kHz) the 350 ms watchdog
+  released the tap, leaving playback at the unprocessed level until a file edit.
+  Verification occupied the session queue for about 660 ms; two trials also
+  logged aggregate StartIO error 35. The idle 48→44.1→96→48 kHz sequence kept
+  the session and its processing. Each change produced 4–17 format/verification
+  reports. Playback after idle relock began with about 450 ms of silence,
+  compared with roughly 150 ms on ordinary startup. Its cause remains open.
+- **Process termination.** From measured level transitions, quit, SIGTERM and
+  SIGKILL restored direct audio in about 230, 90 and 110 ms respectively, with
+  at most 30 ms of silence and no observed burst (one run each). SIGSTOP kept
+  the output silent for the two-second stop. After SIGCONT, processing returned
+  within 50 ms.
+- **Unplug.** Two unplugs included one during playback. The app reported one
+  removal on loss. Fallback speaker playback was confirmed by ear only. On
+  replug the DAC became default and a verified session restarted in about 54 ms
+  without a file edit. The cup recording measured −14.9 dB at 1 kHz after replug.
+- **Watchdog and settings.** Outside the playing rate changes, starts/stops, two
+  mid-tone player IO restarts, eight seconds of exact zeros, idle periods and
+  transient activity-read failures caused no observed false failure. Absent or
+  disabled settings and an explicit “none” assignment stayed idle. Truncated
+  JSON, a missing field, a wrong type and an empty UID produced Activity reasons.
+  A +6 dB preamp and +6 dB peak, a +12 dB peak at 5 Hz, a +24 dB shelf at
+  8 Hz, and +30 dB preamp alone reported 12, 12, 24 and 30 dB headroom.
+
+These small counts describe this device. Denied and unanswered prompts,
+sleep/wake, EQ with automatic routing enabled, rates below 32 kHz, DAC outputs
+with their own input streams, and inspection for leftover private taps after USB
+teardown remain untested in this session.
+
+### Open
 
 | # | Question | What it decides | Needed by |
 | --- | --- | --- | --- |
