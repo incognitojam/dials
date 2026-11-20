@@ -242,7 +242,7 @@ switch themselves off part way through a measurement, closing the channel. Two r
 this way and the disconnect looked like a protocol fault. Turn it off before measuring.
 
 While in that settings screen: *DSEE Extreme* was set to Auto throughout. It is an adaptive
-upscaler sitting between whatever the Mac sends and the drivers, and it is a better candidate
-than noise cancelling for the unexplained acoustic timing scatter in
-[System audio taps](audio-taps.md), since the vendor equalizer was verified off the whole
-time. Disable it before repeating that measurement.
+upscaler sitting between whatever the Mac sends and the drivers. It was once a suspect for
+the acoustic timing scatter in [System audio taps](audio-taps.md#open-questions), which
+is consistent instead with the measurement's search window. Turn it off for any acoustic
+measurement all the same.
