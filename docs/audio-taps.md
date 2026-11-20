@@ -61,7 +61,8 @@ app has one way to mute the machine and no way to notice; how a missing or revok
 permission can be detected is still open.
 
 The permission attaches to the signing identity, so build with a stable `neqMac Local`
-certificate, as described in [Signing](development.md#signing). An ad-hoc rebuild can require fresh authorization.
+certificate, as described in [Signing](development.md#signing). An ad-hoc rebuild
+can require fresh authorization.
 
 ## It must be a signed bundle that is its own responsible process
 

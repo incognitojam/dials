@@ -557,8 +557,7 @@ runs used the same build with four scalar reads corrected locally.
   Verification occupied the session queue for about 660 ms; two trials also
   logged aggregate StartIO error 35. The idle 48→44.1→96→48 kHz sequence kept
   the session and its processing. Each change produced 4–17 format/verification
-  reports. Playback after idle relock began with about 450 ms of silence,
-  compared with roughly 150 ms on ordinary startup. Its cause remains open.
+  reports.
 - **Process termination.** From measured level transitions, quit, SIGTERM and
   SIGKILL restored direct audio in about 230, 90 and 110 ms respectively, with
   at most 30 ms of silence and no observed burst (one run each). SIGSTOP kept
@@ -577,9 +576,11 @@ runs used the same build with four scalar reads corrected locally.
   8 Hz, and +30 dB preamp alone reported 12, 12, 24 and 30 dB headroom.
 
 These small counts describe this device. Denied and unanswered prompts,
-sleep/wake, EQ with automatic routing enabled, rates below 32 kHz, DAC outputs
-with their own input streams, and inspection for leftover private taps after USB
-teardown remain untested in this session.
+sleep/wake, EQ with automatic routing enabled, rates below 32 kHz, and inspection
+for leftover private taps after USB teardown remain untested in this session.
+The engine taps and mutes only output stream 0. Other streams on a multi-stream
+output would pass through unprocessed. Multi-buffer, more-than-stereo,
+non-interleaved and duplex layouts have only been exercised with test doubles.
 
 ### Open
 
