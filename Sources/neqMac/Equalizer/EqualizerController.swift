@@ -12,8 +12,8 @@ protocol OutputEqualizing: AnyObject {
 
 @available(macOS 14.2, *)
 protocol EqualizerHardware {
-    func isCurrent(_ device: AudioDevice) -> Bool
-    func rate(_ device: AudioDevice) -> Double?
+    func isCurrent(_ device: AudioDevice) throws -> Bool
+    func rate(_ device: AudioDevice) throws -> Double?
     func observeRate(_ device: AudioDevice, queue: DispatchQueue, changed: @escaping () -> Void) throws -> () -> Void
     func tap(_ device: AudioDevice, duplex: Bool, queue: DispatchQueue, diagnostic: @escaping (String) -> Void,
              wanted: @escaping () -> Bool, changed: @escaping () -> Void) -> TapDevice
@@ -21,18 +21,18 @@ protocol EqualizerHardware {
 
 @available(macOS 14.2, *)
 struct SystemEqualizerHardware: EqualizerHardware {
-    func isCurrent(_ device: AudioDevice) -> Bool {
+    func isCurrent(_ device: AudioDevice) throws -> Bool {
         let system = AudioObjectID(kAudioObjectSystemObject)
         let scope = kAudioObjectPropertyScopeGlobal
-        let id: AudioObjectID? = try? CoreAudioClient.readScalar(objectID: system, selector: kAudioHardwarePropertyDefaultOutputDevice, scope: scope)
+        let id: AudioObjectID = try CoreAudioClient.readScalar(objectID: system, selector: kAudioHardwarePropertyDefaultOutputDevice, scope: scope)
         guard id == device.audioObjectID else { return false }
-        let alive: UInt32? = try? CoreAudioClient.readScalar(objectID: device.audioObjectID, selector: kAudioDevicePropertyDeviceIsAlive, scope: scope)
-        let devices: [AudioObjectID]? = try? CoreAudioClient.readArray(objectID: system, selector: kAudioHardwarePropertyDevices, scope: scope)
-        return alive == 1 && devices?.contains(device.audioObjectID) == true
+        let alive: UInt32 = try CoreAudioClient.readScalar(objectID: device.audioObjectID, selector: kAudioDevicePropertyDeviceIsAlive, scope: scope)
+        let devices: [AudioObjectID] = try CoreAudioClient.readArray(objectID: system, selector: kAudioHardwarePropertyDevices, scope: scope)
+        return alive == 1 && devices.contains(device.audioObjectID)
     }
 
-    func rate(_ device: AudioDevice) -> Double? {
-        try? CoreAudioClient.readScalar(objectID: device.audioObjectID, selector: kAudioDevicePropertyNominalSampleRate,
+    func rate(_ device: AudioDevice) throws -> Double? {
+        try CoreAudioClient.readScalar(objectID: device.audioObjectID, selector: kAudioDevicePropertyNominalSampleRate,
                                         scope: kAudioObjectPropertyScopeGlobal)
     }
 
@@ -182,11 +182,15 @@ final class EqualizerController: OutputEqualizing {
         if formatChanged { engine.session?.monitor.formatChanged() }
         let current: AudioDevice?
         if let output, case let .loaded(settings) = file, settings.enabled {
-            current = hardware.isCurrent(output) ? output : nil
+            do { current = try hardware.isCurrent(output) ? output : nil }
+            catch { diagnostic("Equalizer idle · " + error.localizedDescription); current = nil }
         } else { current = output }
         let rate: Double?
         if let current, case let .loaded(settings) = file, settings.enabled, DesiredEqualizer.eligible(current) {
-            if let observed = hardware.rate(current) {
+            let observed: Double?
+            do { observed = try hardware.rate(current) }
+            catch { diagnostic(error.localizedDescription); observed = nil }
+            if let observed {
                 lastRate = observed
                 rate = observed
             } else {
@@ -203,7 +207,8 @@ final class EqualizerController: OutputEqualizing {
             return hardware.tap(device, duplex: settings.allowsDuplex(device), queue: queue, diagnostic: diagnostic,
                                 wanted: { [weak self, hardware, url, file] in
                 guard let self, generation == token, engine.session != nil, !asleep.withLock({ $0 }) else { return false }
-                return hardware.isCurrent(device) && SettingsFile(at: url) == file
+                do { return try hardware.isCurrent(device) && SettingsFile(at: url) == file }
+                catch { diagnostic(error.localizedDescription); return false }
             }) { [weak self] in
                 guard let self, generation == token, engine.session != nil else { return }
                 evaluate(formatChanged: true)

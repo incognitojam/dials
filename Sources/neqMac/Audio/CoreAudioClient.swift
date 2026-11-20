@@ -2,6 +2,13 @@ import CoreAudio
 import Foundation
 import RoutingCore
 
+protocol HALScalar {}
+extension UInt32: HALScalar {}
+extension Double: HALScalar {}
+extension AudioStreamBasicDescription: HALScalar {}
+// HAL returns retained array properties through a nullable CF pointer.
+extension Optional: HALScalar where Wrapped == Unmanaged<CFArray> {}
+
 enum CoreAudioError: LocalizedError {
     case propertyRead(selector: AudioObjectPropertySelector, status: OSStatus)
     case propertyWrite(selector: AudioObjectPropertySelector, status: OSStatus)
@@ -77,12 +84,11 @@ final class CoreAudioClient: AudioDeviceClient {
                 selector: kAudioObjectPropertyName,
                 scope: kAudioObjectPropertyScopeGlobal
             )) ?? unknownDeviceName
-            // Constrain the generic read inside try? so its storage is UInt32, not Optional<UInt32>.
             let transport = (try? Self.readScalar(
                 objectID: id,
                 selector: kAudioDevicePropertyTransportType,
                 scope: kAudioObjectPropertyScopeGlobal
-            ) as UInt32) ?? kAudioDeviceTransportTypeUnknown
+            )) ?? kAudioDeviceTransportTypeUnknown
 
             var result: [AudioDevice] = []
             if hasStreams(deviceID: id, scope: kAudioDevicePropertyScopeInput) {
@@ -220,7 +226,7 @@ final class CoreAudioClient: AudioDeviceClient {
         return value as String
     }
 
-    static func readScalar<T>(
+    static func readScalar<T: HALScalar>(
         objectID: AudioObjectID,
         selector: AudioObjectPropertySelector,
         scope: AudioObjectPropertyScope
@@ -247,11 +253,11 @@ final class CoreAudioClient: AudioDeviceClient {
         return storage.load(as: T.self)
     }
 
-    static func readArray<T>(
+    static func readArray(
         objectID: AudioObjectID,
         selector: AudioObjectPropertySelector,
         scope: AudioObjectPropertyScope
-    ) throws -> [T] {
+    ) throws -> [AudioObjectID] {
         var address = AudioObjectPropertyAddress(
             mSelector: selector,
             mScope: scope,
@@ -264,10 +270,10 @@ final class CoreAudioClient: AudioDeviceClient {
         }
         guard size > 0 else { return [] }
 
-        let count = Int(size) / MemoryLayout<T>.stride
+        let count = Int(size) / MemoryLayout<AudioObjectID>.stride
         let storage = UnsafeMutableRawPointer.allocate(
             byteCount: Int(size),
-            alignment: MemoryLayout<T>.alignment
+            alignment: MemoryLayout<AudioObjectID>.alignment
         )
         defer { storage.deallocate() }
 
@@ -275,7 +281,7 @@ final class CoreAudioClient: AudioDeviceClient {
         guard status == noErr else {
             throw CoreAudioError.propertyRead(selector: selector, status: status)
         }
-        let buffer = UnsafeBufferPointer(start: storage.assumingMemoryBound(to: T.self), count: min(count, Int(size) / MemoryLayout<T>.stride))
+        let buffer = UnsafeBufferPointer(start: storage.assumingMemoryBound(to: AudioObjectID.self), count: min(count, Int(size) / MemoryLayout<AudioObjectID>.stride))
         return Array(buffer)
     }
 

@@ -7,6 +7,7 @@ import XCTest
 @available(macOS 14.2, *)
 final class EqualizerControllerTests: XCTestCase {
     final class Hardware: EqualizerHardware {
+        var readError: Error?
         var present = true
         var rateValue: Double? = 48_000
         var fail = false
@@ -15,7 +16,10 @@ final class EqualizerControllerTests: XCTestCase {
         var callbacks: [() -> Void] = []
         var wanted: [() -> Bool] = []
         var duplex: [Bool] = []
-        func isCurrent(_ device: AudioDevice) -> Bool { present }
+        func isCurrent(_ device: AudioDevice) throws -> Bool {
+            if let readError { throw readError }
+            return present
+        }
         func rate(_ device: AudioDevice) -> Double? { rateValue }
         func observeRate(_ device: AudioDevice, queue: DispatchQueue, changed: @escaping () -> Void) throws -> () -> Void { {} }
         func tap(_ device: AudioDevice, duplex: Bool, queue: DispatchQueue, diagnostic: @escaping (String) -> Void,
@@ -59,6 +63,15 @@ final class EqualizerControllerTests: XCTestCase {
         controller = nil
         queue.sync {}
         try FileManager.default.removeItem(at: directory)
+    }
+
+    func testCurrentOutputReadFailureExplainsIdle() {
+        hardware.readError = TapError(message: "default output unavailable")
+        controller.settled(output: device)
+        queue.sync {
+            XCTAssertTrue(messages.contains("Equalizer idle · default output unavailable"))
+            XCTAssertTrue(hardware.backends.isEmpty)
+        }
     }
 
     func testPhysicalRemovalAndSameIDReconnectIgnoreOldGeneration() {
