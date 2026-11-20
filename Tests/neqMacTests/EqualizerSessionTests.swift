@@ -94,10 +94,11 @@ final class EqualizerSessionTests: XCTestCase {
         var statuses = [SessionStatus]()
         let engine = SessionEngine { statuses.append($0) }
         engine.reconcile(desired, output: output) { _ in audio }
-        engine.reconcile(.process(profile, try EqualizerPlan(profile.parameters, sampleRate: 96_000)), output: output, formatChanged: true) { _ in XCTFail(); return audio }
+        engine.reconcile(.process(profile, try EqualizerPlan(profile.parameters, sampleRate: 96_000)), output: output) { _ in XCTFail(); return audio }
+        engine.session?.verification.sync {}
         XCTAssertEqual(audio.calls, ["tap","aggregate","configure","io","start","configure"])
         XCTAssertEqual(audio.rates, [48_000, 96_000])
-        XCTAssertEqual(statuses, [.starting, .running])
+        XCTAssertEqual(statuses, [.starting, .running, .reconfiguring])
         let next = AudioDevice(audioObjectID: 102, uid: "second", name: "Second DAC", direction: .output, transportType: kAudioDeviceTransportTypeUSB)
         let other = Backend()
         engine.reconcile(desired, output: next) { _ in other }
@@ -188,24 +189,90 @@ final class EqualizerSessionTests: XCTestCase {
         XCTAssertEqual(audio.calls.filter { $0 == "unmute" }.count, 1)
     }
 
-    func testFormatNotificationsResetDeadlineAndRetryWithoutFailure() throws {
+    func testMeasuredRelockAndLateCallbackKeepVerifiedSession() throws {
+        for resume in [0.75, 2.01] {
+            let audio = Backend()
+            let monitor = SessionGuard(audio)
+            try monitor.createTap()
+            monitor.setPlaying(true)
+            monitor.formatChanged(now: 0)
+            XCTAssertNil(monitor.check(now: 0.65))
+            monitor.verifiedFormat()
+            audio.heartbeat += 1
+            if resume < 2 {
+                XCTAssertNil(monitor.check(now: resume))
+                audio.heartbeat += 1
+            }
+            XCTAssertEqual(monitor.check(now: max(2, resume)), .running)
+            XCTAssertEqual(audio.calls, ["tap"])
+            XCTAssertEqual(monitor.check(now: 2.4), .failed("Audio callback stalled"))
+        }
+    }
+
+    func testNotificationStormCannotExtendStuckIOAndRebuildsOnce() throws {
+        for failedBuild in [false, true] {
+            let engine = SessionEngine { _ in }
+            let audio = Backend()
+            engine.reconcile(desired, output: output) { _ in audio }
+            for cycle in 0..<(failedBuild ? 1 : 4) {
+                let old = try XCTUnwrap(engine.session)
+                old.monitor.setPlaying(true)
+                audio.heartbeat += 1
+                old.monitor.formatChanged(now: 0)
+                for tick in 0..<20 {
+                    let now = Double(tick) / 10
+                    old.monitor.formatChanged(now: now)
+                    old.monitor.verifiedFormat()
+                    XCTAssertNil(old.monitor.check(now: now))
+                }
+                let reason = try XCTUnwrap(old.monitor.check(now: 2.01))
+                XCTAssertEqual(reason, SessionGuard.restartIO)
+                if failedBuild { audio.failure = "start" }
+                var attempts = 0
+                func restart() {
+                    attempts += 1
+                    engine.reconcile(desired, output: output) { _ in audio }
+                }
+                engine.observed(old, reason, evaluate: restart)
+                engine.observed(old, reason, evaluate: restart)
+                XCTAssertEqual(attempts, 1)
+                XCTAssertEqual(engine.status, failedBuild ? .failed("start") : .running)
+                XCTAssertEqual(audio.calls.filter { $0 == "start" }.count, cycle + 2)
+            }
+            if failedBuild {
+                engine.reconcile(desired, output: output) { _ in XCTFail("Repeated failed recovery"); return audio }
+                // A second failure is needed to reach lockout after switching away and back.
+                engine.reconcile(.off, output: nil) { _ in audio }
+                engine.reconcile(desired, output: output) { _ in audio }
+                XCTAssertEqual(engine.status, .failed("start"))
+            }
+        }
+    }
+
+    func testSlowVerificationLeavesLifecycleQueueAvailableAndCompilesNewPlan() throws {
+        let owner = DispatchQueue(label: "test.session")
+        let engine = SessionEngine(queue: owner) { _ in }
         let audio = Backend()
-        let engine = SessionEngine { _ in }
-        engine.reconcile(desired, output: output) { _ in audio }
-        let session = try XCTUnwrap(engine.session)
-        session.monitor.setPlaying(true)
-        XCTAssertNil(session.monitor.check(now: 0))
-        audio.failure = "configure"
-        engine.reconcile(desired, output: output, formatChanged: true) { _ in XCTFail(); return audio }
-        XCTAssertNil(session.monitor.check(now: 0.6))
-        XCTAssertTrue(engine.session === session)
-        audio.failure = nil
-        engine.reconcile(desired, output: output, formatChanged: true) { _ in XCTFail(); return audio }
-        XCTAssertEqual(engine.status, .running)
-        audio.failure = "configure"
-        for _ in 0..<3 { engine.reconcile(desired, output: output, formatChanged: true) { _ in audio } }
-        XCTAssertEqual(engine.status, .suspended("Format unavailable after three configuration notifications"))
-        XCTAssertEqual(Array(audio.calls.suffix(4)), teardown)
+        let entered = expectation(description: "verification began")
+        let done = expectation(description: "session queue available during HAL wait")
+        owner.sync { engine.reconcile(desired, output: output) { _ in audio } }
+        let old = try XCTUnwrap(engine.session)
+        let plan = try EqualizerPlan(profile.parameters, sampleRate: 96_000)
+        owner.async { [self] in
+            audio.onConfigure = {
+                entered.fulfill()
+                Thread.sleep(forTimeInterval: 0.66)
+            }
+            engine.reconcile(.process(profile, plan), output: output) { _ in XCTFail(); return audio }
+        }
+        wait(for: [entered], timeout: 2)
+        owner.async { done.fulfill() }
+        wait(for: [done], timeout: 0.35)
+        old.verification.sync {}
+        owner.sync {
+            XCTAssertTrue(engine.session === old)
+            XCTAssertEqual(audio.rates, [48_000, 96_000])
+        }
     }
 
     func testUnplugDuringBuildSuspends() {

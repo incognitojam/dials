@@ -1,5 +1,6 @@
 import CoreAudio
 import EqualizerCore
+import OSLog
 import EqualizerIO
 import Foundation
 
@@ -48,6 +49,9 @@ class CoreAudioTap: TapDevice {
     private var layout: TapLayout?
     private var observingOverloads = false
     private var overloads: UInt64 = 0
+    private var initialFormatReport = ""
+    private var lastLayoutReport = ""
+    private var lastHeadroom = 0.0
     private var lastDiagnostics: TimeInterval = 0
     private var ownProcess: AudioObjectID = 0
     private var tap: AudioObjectID = 0
@@ -183,8 +187,7 @@ class CoreAudioTap: TapDevice {
             ] {
                 observations.append(try AudioObservation(object, selector, scope: scope, queue: queue) { [weak self] in
                     guard let self else { return }
-                    if selector == kAudioDevicePropertyStreams || selector == kAudioDevicePropertyStreamConfiguration ||
-                        selector == kAudioTapPropertyFormat, let render { RenderContext.invalidate(render) }
+                    if let render { RenderContext.invalidate(render) }
                     changed()
                 })
             }
@@ -206,6 +209,7 @@ class CoreAudioTap: TapDevice {
     }
 
     private func configureStreams(_ profile: EQInfo, proposed: EqualizerPlan) throws {
+        let revision = render.map(RenderContext.invalidate)
         let format: AudioStreamBasicDescription = try CoreAudioClient.readScalar(objectID: tap,
             selector: kAudioTapPropertyFormat, scope: global)
         guard format.mSampleRate >= 32_000 else { throw SessionError.lowRate }
@@ -219,7 +223,11 @@ class CoreAudioTap: TapDevice {
         try TapLayout.requireConsent(inputStreams: physicalInputs.count, bufferWidths: physicalWidths, allowed: allowDuplexInput)
         hadPhysicalInputs = hadPhysicalInputs || !physicalInputs.isEmpty || physicalWidths.contains(where: { $0 > 0 })
         let frames: UInt32 = try CoreAudioClient.readScalar(objectID: aggregate, selector: kAudioDevicePropertyBufferFrameSize, scope: global)
-        diagnostic("Tap format \(format.mSampleRate) Hz, \(format.mChannelsPerFrame) ch, flags \(format.mFormatFlags), \(format.mBitsPerChannel) bits, \(format.mBytesPerFrame) bytes/frame. Aggregate input IDs \(inputs), buffers \(inputWidths); outputs \(outputs), buffers \(outputWidths); IO buffer \(frames) frames")
+        let formatReport = "Tap format \(format.mSampleRate) Hz, \(format.mChannelsPerFrame) ch, flags \(format.mFormatFlags), \(format.mBitsPerChannel) bits, \(format.mBytesPerFrame) bytes/frame. Aggregate input IDs \(inputs), buffers \(inputWidths); outputs \(outputs), buffers \(outputWidths); IO buffer \(frames) frames"
+        if io == nil, formatReport != initialFormatReport {
+            diagnostic(formatReport)
+            initialFormatReport = formatReport
+        }
         guard !outputs.isEmpty, outputWidths.contains(where: { $0 > 0 }), !inputs.isEmpty else {
             throw TapError(message: "Aggregate stream configuration is settling")
         }
@@ -241,21 +249,32 @@ class CoreAudioTap: TapDevice {
                 selector: kAudioStreamPropertyVirtualFormat, scope: global)
             guard TapLayout.supported(outputFormat) else { throw SessionError.layout("Unsupported aggregate output format") }
         }
-        if let io, let render {
-            RenderContext.invalidate(render)
+        if let io {
             try verifyUsage(io, selection, install: false)
         }
         layout = selection
         let evidence = hadPhysicalInputs ? "retained tap-only ID" : "sole input on output-only device"
-        diagnostic("Verified \(evidence), stream ID \(tapStream) at input stream \(selection.streamIndex), starting channel \(start), first buffer \(selection.buffers.firstBuffer), \(selection.buffers.bufferCount) buffer(s)")
-        if plan.headroomDB > 0 { diagnostic(String(format: "Applied %.2f dB of equalizer headroom", plan.headroomDB)) }
+        let selectionReport = "Verified \(evidence), stream ID \(tapStream) at input stream \(selection.streamIndex), starting channel \(start), first buffer \(selection.buffers.firstBuffer), \(selection.buffers.bufferCount) buffer(s)"
         if let render {
-            RenderContext.publish(render, plan: plan, channels: Int(format.mChannelsPerFrame), layout: selection.buffers)
+            guard RenderContext.publish(render, plan: plan, channels: Int(format.mChannelsPerFrame),
+                                        layout: selection.buffers, revision: revision) else {
+                throw SessionError.layout("Input layout changed during verification")
+            }
         } else {
             let context = UnsafeMutablePointer<RenderContext>.allocate(capacity: 1)
             context.initialize(to: RenderContext(plan: plan, channels: Int(format.mChannelsPerFrame), layout: selection.buffers))
             observingOverloads = EQObserveOverloads(aggregate, context.pointee.meter, true) == noErr
             render = context
+        }
+        let layoutReport = formatReport + ". " + selectionReport
+        if layoutReport != lastLayoutReport {
+            if io == nil { diagnostic(selectionReport) }
+            else { Logger(subsystem: "dev.neqmac.app", category: "equalizer").notice("\(layoutReport, privacy: .public)") }
+            lastLayoutReport = layoutReport
+        }
+        if plan.headroomDB != lastHeadroom {
+            diagnostic(String(format: "Applied %.2f dB of equalizer headroom", plan.headroomDB))
+            lastHeadroom = plan.headroomDB
         }
     }
 

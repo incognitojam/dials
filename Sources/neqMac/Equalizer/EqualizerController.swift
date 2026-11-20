@@ -79,7 +79,7 @@ final class EqualizerController: OutputEqualizing {
             diagnostic(message)
         }
         self.diagnostic = log
-        engine = SessionEngine(diagnostic: log, didTearDown: didTearDown) { status in
+        engine = SessionEngine(queue: queue, diagnostic: log, didTearDown: didTearDown) { status in
             logger.notice("Equalizer status: \(String(describing: status), privacy: .public)")
             report(status)
         }
@@ -182,7 +182,7 @@ final class EqualizerController: OutputEqualizing {
 
     private func evaluate(retry: Bool = false, formatChanged: Bool = false) {
         guard !asleep.withLock({ $0 }) else { return }
-        if formatChanged { engine.session?.monitor.formatChanged() }
+        if formatChanged, engine.session != nil { engine.formatChanged(); return }
         let current: AudioDevice?
         if let output, case let .loaded(settings) = file, settings.enabled {
             do { current = try hardware.isCurrent(output) ? output : nil }
@@ -202,7 +202,7 @@ final class EqualizerController: OutputEqualizing {
         } else { rate = nil }
         let desired = DesiredEqualizer.resolve(file, device: current, rate: rate)
         let previous = engine.session
-        engine.reconcile(desired, output: current, retry: retry, formatChanged: formatChanged) { device in
+        engine.reconcile(desired, output: current, retry: retry) { device in
             let token = UUID()
             generation = token
             guard case let .loaded(settings) = file else { preconditionFailure("Processing requires settings") }
@@ -217,7 +217,10 @@ final class EqualizerController: OutputEqualizing {
             }
         }
         if let session = engine.session, session !== previous {
-            session.watch(on: queue) { [weak self] old, reason in self?.engine.finish(old, reason: reason) }
+            session.watch(on: queue) { [weak self] old, reason in
+                guard let self else { return }
+                engine.observed(old, reason) { self.evaluate() }
+            }
         }
     }
 }
