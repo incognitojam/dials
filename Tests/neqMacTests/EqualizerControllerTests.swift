@@ -20,7 +20,10 @@ final class EqualizerControllerTests: XCTestCase {
             if let readError { throw readError }
             return present
         }
-        func rate(_ device: AudioDevice) -> Double? { rateValue }
+        func rate(_ device: AudioDevice) throws -> Double {
+            guard let rateValue else { throw TapError(message: "Rate unavailable") }
+            return rateValue
+        }
         func observeRate(_ device: AudioDevice, queue: DispatchQueue, changed: @escaping () -> Void) throws -> () -> Void { {} }
         func tap(_ device: AudioDevice, duplex: Bool, queue: DispatchQueue, diagnostic: @escaping (String) -> Void,
                  wanted: @escaping () -> Bool, changed: @escaping () -> Void) -> TapDevice {

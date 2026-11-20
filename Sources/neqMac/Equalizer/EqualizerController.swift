@@ -13,7 +13,7 @@ protocol OutputEqualizing: AnyObject {
 @available(macOS 14.2, *)
 protocol EqualizerHardware {
     func isCurrent(_ device: AudioDevice) throws -> Bool
-    func rate(_ device: AudioDevice) throws -> Double?
+    func rate(_ device: AudioDevice) throws -> Double
     func observeRate(_ device: AudioDevice, queue: DispatchQueue, changed: @escaping () -> Void) throws -> () -> Void
     func tap(_ device: AudioDevice, duplex: Bool, queue: DispatchQueue, diagnostic: @escaping (String) -> Void,
              wanted: @escaping () -> Bool, changed: @escaping () -> Void) -> TapDevice
@@ -26,12 +26,15 @@ struct SystemEqualizerHardware: EqualizerHardware {
         let scope = kAudioObjectPropertyScopeGlobal
         let id: AudioObjectID = try CoreAudioClient.readScalar(objectID: system, selector: kAudioHardwarePropertyDefaultOutputDevice, scope: scope)
         guard id == device.audioObjectID else { return false }
-        let alive: UInt32 = try CoreAudioClient.readScalar(objectID: device.audioObjectID, selector: kAudioDevicePropertyDeviceIsAlive, scope: scope)
+        let alive: UInt32
+        do {
+            alive = try CoreAudioClient.readScalar(objectID: device.audioObjectID, selector: kAudioDevicePropertyDeviceIsAlive, scope: scope)
+        } catch CoreAudioError.propertyRead(_, kAudioHardwareBadObjectError) { return false }
         let devices: [AudioObjectID] = try CoreAudioClient.readArray(objectID: system, selector: kAudioHardwarePropertyDevices, scope: scope)
         return alive == 1 && devices.contains(device.audioObjectID)
     }
 
-    func rate(_ device: AudioDevice) throws -> Double? {
+    func rate(_ device: AudioDevice) throws -> Double {
         try CoreAudioClient.readScalar(objectID: device.audioObjectID, selector: kAudioDevicePropertyNominalSampleRate,
                                         scope: kAudioObjectPropertyScopeGlobal)
     }
@@ -187,13 +190,12 @@ final class EqualizerController: OutputEqualizing {
         } else { current = output }
         let rate: Double?
         if let current, case let .loaded(settings) = file, settings.enabled, DesiredEqualizer.eligible(current) {
-            let observed: Double?
-            do { observed = try hardware.rate(current) }
-            catch { diagnostic(error.localizedDescription); observed = nil }
-            if let observed {
+            do {
+                let observed = try hardware.rate(current)
                 lastRate = observed
                 rate = observed
-            } else {
+            } catch {
+                diagnostic(error.localizedDescription)
                 // The live tap still verifies its negotiated format during clock relock.
                 rate = engine.session == nil ? nil : lastRate
             }

@@ -3,16 +3,41 @@ import XCTest
 @testable import neqMac
 
 final class CoreAudioClientTests: XCTestCase {
-    @available(macOS 14.2, *)
-    func testLiveDefaultOutputIsCurrentAndHasNominalRate() throws {
+    private func defaultOutput() throws -> AudioDevice {
         let client = CoreAudioClient()
         let id = try client.defaultDeviceID(for: .output)
         try XCTSkipIf(id == kAudioObjectUnknown, "No default output on this host")
         let devices = try client.devices()
-        let output = try XCTUnwrap(devices.first { $0.audioObjectID == id && $0.direction == .output })
+        let output = devices.first { $0.audioObjectID == id && $0.direction == .output }
+        try XCTSkipUnless(output != nil, "Default output unavailable in device discovery")
+        return try XCTUnwrap(output)
+    }
+
+    @available(macOS 14.2, *)
+    func testLiveOutputMetadataWithoutCreatingTap() throws {
+        let output = try defaultOutput()
+        let backend = CoreAudioTap(output: output, queue: .main, changed: {})
+        _ = try backend.physicalInputsBeforeCapture()
+        XCTAssertFalse(backend.removed)
+        XCTAssertNotNil(backend.otherProcessPlaying)
+        let scope = kAudioObjectPropertyScopeGlobal
+        let frames: UInt32 = try CoreAudioClient.readScalar(objectID: output.audioObjectID,
+            selector: kAudioDevicePropertyBufferFrameSize, scope: scope)
+        XCTAssertGreaterThan(frames, 0)
+        let streams = try CoreAudioClient.readArray(objectID: output.audioObjectID,
+            selector: kAudioDevicePropertyStreams, scope: kAudioObjectPropertyScopeOutput)
+        let format: AudioStreamBasicDescription = try CoreAudioClient.readScalar(objectID: XCTUnwrap(streams.first),
+            selector: kAudioStreamPropertyVirtualFormat, scope: scope)
+        XCTAssertGreaterThan(format.mChannelsPerFrame, 0)
+        XCTAssertGreaterThan(format.mSampleRate, 0)
+    }
+
+    @available(macOS 14.2, *)
+    func testLiveDefaultOutputIsCurrentAndHasNominalRate() throws {
+        let output = try defaultOutput()
         let hardware = SystemEqualizerHardware()
         XCTAssertTrue(try hardware.isCurrent(output))
-        XCTAssertGreaterThan(try XCTUnwrap(hardware.rate(output)), 0)
+        XCTAssertGreaterThan(try hardware.rate(output), 0)
     }
 
     func testCoreAudioDiscoveryReadsLiveTransportMetadata() throws {

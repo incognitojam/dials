@@ -2,6 +2,11 @@ import CoreAudio
 import Foundation
 import RoutingCore
 
+protocol HALWritableScalar {}
+extension UInt32: HALWritableScalar {}
+extension CFArray: HALWritableScalar {}
+extension CFString: HALWritableScalar {}
+
 protocol HALScalar {}
 extension UInt32: HALScalar {}
 extension Double: HALScalar {}
@@ -210,7 +215,7 @@ final class CoreAudioClient: AudioDeviceClient {
         selector: AudioObjectPropertySelector,
         scope: AudioObjectPropertyScope
     ) throws -> String {
-        var value: CFString = "" as CFString
+        var value: Unmanaged<CFString>?
         var size = UInt32(MemoryLayout<CFString>.size)
         var address = AudioObjectPropertyAddress(
             mSelector: selector,
@@ -223,7 +228,8 @@ final class CoreAudioClient: AudioDeviceClient {
         guard status == noErr else {
             throw CoreAudioError.propertyRead(selector: selector, status: status)
         }
-        return value as String
+        guard let value else { throw CoreAudioError.missingValue(selector: selector) }
+        return value.takeRetainedValue() as String
     }
 
     static func readScalar<T: HALScalar>(
@@ -285,7 +291,7 @@ final class CoreAudioClient: AudioDeviceClient {
         return Array(buffer)
     }
 
-    static func writeScalar<T>(
+    static func writeScalar<T: HALWritableScalar>(
         _ value: T,
         objectID: AudioObjectID,
         selector: AudioObjectPropertySelector,
