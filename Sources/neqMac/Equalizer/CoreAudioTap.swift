@@ -152,7 +152,7 @@ class CoreAudioTap: TapDevice {
         try TapError.check(AudioHardwareCreateAggregateDevice(spec as CFDictionary, &aggregate), "Create aggregate")
     }
 
-    func configure(_ profile: EQInfo, plan: EqualizerPlan) throws {
+    func configure(_ profile: EQInfo, plan: EqualizerPlan) throws -> Double {
         if !attachedOutput {
             // The tap is the aggregate's only source at this point. Retain its actual stream ID.
             var initial: [AudioStreamID] = []
@@ -193,22 +193,23 @@ class CoreAudioTap: TapDevice {
             }
         }
         // HAL publishes the aggregate and its streams separately.
-        for attempt in 0..<10 {
+        var attempts = 0
+        while true {
+            attempts += 1
             do {
-                try configureStreams(profile, proposed: plan)
-                return
+                return try configureStreams(profile, proposed: plan)
             } catch {
                 if let render { RenderContext.invalidate(render) }
                 // A running session retries on the next notification. A new aggregate can
                 // still be publishing its initial streams before listeners have run.
-                if io != nil || attempt == 9 { throw error }
+                if io != nil || attempts == 10 { throw error }
                 if case SessionError.lowRate = error { throw error }
                 Thread.sleep(forTimeInterval: 0.025)
             }
         }
     }
 
-    private func configureStreams(_ profile: EQInfo, proposed: EqualizerPlan) throws {
+    private func configureStreams(_ profile: EQInfo, proposed: EqualizerPlan) throws -> Double {
         let revision = render.map(RenderContext.invalidate)
         let format: AudioStreamBasicDescription = try CoreAudioClient.readScalar(objectID: tap,
             selector: kAudioTapPropertyFormat, scope: global)
@@ -276,6 +277,7 @@ class CoreAudioTap: TapDevice {
             diagnostic(String(format: "Applied %.2f dB of equalizer headroom", plan.headroomDB))
             lastHeadroom = plan.headroomDB
         }
+        return format.mSampleRate
     }
 
     private func verifyUsage(_ io: AudioDeviceIOProcID, _ selection: TapLayout, install: Bool) throws {

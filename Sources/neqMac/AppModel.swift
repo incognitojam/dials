@@ -51,6 +51,7 @@ final class AppModel: ObservableObject {
         defer { lastEqualizerStatus = status }
         switch status {
         case .starting, .idle: break
+        case .restarting(let reason): appendEvent("Equalizer restarting · " + reason, level: .info)
         case .reconfiguring: appendEvent("Equalizer reconfiguring", level: .info)
         case .running where lastEqualizerStatus == .reconfiguring: break
         case .running: appendEvent("Equalizer applied", level: .success)

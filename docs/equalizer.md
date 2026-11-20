@@ -281,14 +281,15 @@ change them.
   speakers, this gave 35–50 ms of unprocessed audio, then about 25 ms with both the
   original and the marker present, and no silence; the order made no measurable
   difference there.
-- **Rate and format changes recompile, never rebuild,** while the device stays eligible.
-  The IOProc survives a rate change on its own: on the speakers the interval between
-  callbacks was 108–184 ms, after which the aggregate restarted at the new rate. The plan
-  is recompiled on the format notification. The IOProc must tolerate the channel count
-  changing and the buffer size changing. M2 observes the current size. Requesting a
-  different size remains open until E11 measures the effect on other clients.
-  Format notifications reset the watchdog interval. Transient property-read failures
-  retry on subsequent notifications, with suspension after three unsuccessful updates.
+- **Rate and format changes recompile at the verified tap rate.** The built-in speakers
+  resumed after 108–184 ms between callbacks. A USB DAC took up to 0.78 s to relock.
+  A notification opens a two-second window. Verification runs on a worker while the
+  watchdog checks IO independently. Idle or progressing IO can allow an in-flight
+  check up to 800 ms more, once. Further notifications cannot move that deadline.
+  Verified IO keeps the session. If layout verification or callback progress fails,
+  release the tap and try one fresh session. A failed recovery counts toward back-off.
+  The callback accepts changes in channel count and buffer size. M2 observes the
+  negotiated buffer size; requesting a different size remains open until E11.
   If the watchdog releases the mute because the layout became unverifiable, the controller
   re-evaluates the current output and settings once after 750 ms. A repeated layout loss
   stays suspended. A rate below 32 kHz, such as the 16 kHz one-channel call profile a headset
@@ -368,8 +369,9 @@ denied or revoked permission that delivers zeros is not yet observable; see E6.
 - **Back-off.** After a failure, neqMac does not restart the session on its own until the
   next device change or user action, and limits attempts per device, so a broken equalizer
   cannot flap the audio on and off. The limits are provisional.
-- **Activity.** Every start, stop and failure is posted to the Activity timeline with its
-  reason.
+- **Activity.** A rate-change notification burst produces one “Equalizer reconfiguring”
+  entry. Automatic restarts give the reason as an informational event. Failures and
+  suspensions carry a warning. Ordinary profile edits keep their playback status.
 - **Crashes need nothing.** Ending the process released the mute and left no tap or
   aggregate behind in every run, so there is nothing to recover after a crash. A hang is
   the danger: a frozen process keeps the device silent until it is continued or killed.

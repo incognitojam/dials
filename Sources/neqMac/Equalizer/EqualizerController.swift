@@ -52,7 +52,7 @@ struct SystemEqualizerHardware: EqualizerHardware {
 final class EqualizerController: OutputEqualizing {
     private let queue: DispatchQueue
     private let hardware: EqualizerHardware
-    private let engine: SessionEngine
+    let engine: SessionEngine
     private let url: URL
     private let diagnostic: (String) -> Void
     private var output: AudioDevice?

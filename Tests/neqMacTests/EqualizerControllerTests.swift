@@ -65,17 +65,18 @@ final class EqualizerControllerTests: XCTestCase {
 
     func testPhysicalRemovalAndSameIDReconnectIgnoreOldGeneration() {
         controller.settled(output: device)
-        queue.sync {
+        let old = queue.sync {
+            let old = controller.engine.session
             XCTAssertEqual(hardware.duplex, [true])
             XCTAssertTrue(hardware.wanted[0]())
             hardware.present = false
             hardware.backends[0].deviceGone = true
             XCTAssertFalse(hardware.wanted[0]())
             hardware.callbacks[0]()
+            return old
         }
-        let removed = expectation(description: "asynchronous removal verification")
-        queue.asyncAfter(deadline: .now() + 0.1) { removed.fulfill() }
-        wait(for: [removed], timeout: 2)
+        guard let old else { return XCTFail("Missing initial session") }
+        old.verification.sync {}
         queue.sync {
             XCTAssertTrue(statuses.contains(.suspended("Device removed")))
         }
@@ -93,6 +94,24 @@ final class EqualizerControllerTests: XCTestCase {
             hardware.callbacks[1]()
             XCTAssertEqual(statuses.last, .reconfiguring)
             XCTAssertTrue(messages.contains { $0.hasPrefix("Create tap: ") })
+        }
+    }
+
+    func testSettledOutputKeepsRateVerifiedByTap() throws {
+        controller.settled(output: device)
+        let session = try queue.sync {
+            let session = try XCTUnwrap(controller.engine.session)
+            hardware.rateValue = 96_000
+            hardware.backends[0].negotiatedRate = 96_000
+            hardware.callbacks[0]()
+            return session
+        }
+        session.verification.sync {}
+        queue.sync { controller.engine.observed(session, .running) { XCTFail() } }
+        controller.settled(output: device)
+        queue.sync {
+            XCTAssertEqual(statuses, [.starting, .running, .reconfiguring, .running])
+            XCTAssertEqual(session.verifiedRate, 96_000)
         }
     }
 
