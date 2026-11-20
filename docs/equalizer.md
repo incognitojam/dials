@@ -242,16 +242,16 @@ The measured 41.5 s wait occurred before `AudioDeviceStart`. Building it:
    buffers of disabled inputs. A mismatched layout produces silence and cannot advance
    the watchdog heartbeat.
 
-A USB device with inputs requires the assignment key `allowDuplexInput` to be true.
-The default suspends before tap creation. Opt-in keeps all the identity, format and
-stream-usage checks. The macOS SDK documents that sub-taps have no streams of their
-own. On an output-only DAC the aggregate's sole input identifies the tap even if HAL
-reissues the stream ID. On a duplex DAC the tap-only stream ID must survive attachment
-at either end of the stream list, alongside one stream per physical input stream.
-Reconfiguration checks the IO-proc mask and repairs a changed mask before republishing
-the input selection. Apple's stream mask applies to the
-IO proc. Driver-level microphone power and the behaviour of the target USB DAC still
-need hardware verification. [Apple’s IO-proc stream usage](https://developer.apple.com/documentation/coreaudio/audiohardwareioprocstreamusage)
+A USB device with inputs requires the assignment key `allowDuplexInput` to be true. The
+default suspends before tap creation. Opt-in keeps all the identity, format and
+stream-usage checks. The macOS SDK documents that sub-taps have no streams of their own.
+On an output-only DAC the aggregate's sole input identifies the tap even if HAL reissues
+the stream ID. On a duplex DAC the tap-only stream ID must survive attachment at either
+end of the stream list, alongside one stream per physical input stream. Reconfiguration
+checks the IO-proc mask and repairs a changed mask before republishing the input
+selection. Apple's stream mask applies to the IO proc. Driver-level microphone power and
+the behaviour of the target USB DAC still need hardware verification.
+[Apple’s IO-proc stream usage](https://developer.apple.com/documentation/coreaudio/audiohardwareioprocstreamusage)
 
 Playback headroom covers DC through Nyquist. The peak search samples DC, 4096
 logarithmic intervals from 1 Hz to Nyquist, and each in-range band center. It refines
@@ -283,16 +283,16 @@ change them.
   difference there.
 - **Rate and format changes recompile, never rebuild,** while the device stays eligible.
   The IOProc survives a rate change on its own: on the speakers the interval between
-  callbacks was 108–184 ms, after which the aggregate restarted at the new rate. The plan
-  is recompiled on the format notification. The IOProc must tolerate the channel count
-  changing and the buffer size changing. M2 observes the current size. Requesting a
-  different size remains open until E11 measures the effect on other clients.
-  Format notifications reset the watchdog interval. Transient property-read failures
-  retry on subsequent notifications, with suspension after three unsuccessful updates.
-  If the watchdog releases the mute because the layout became unverifiable, the controller
+  callbacks was 108–184 ms, after which the aggregate restarted at the new rate. The
+  plan is recompiled on the format notification. The IOProc must tolerate the channel
+  count changing and the buffer size changing. M2 observes the current size. Requesting
+  a different size remains open until E11 measures the effect on other clients. Format
+  notifications reset the watchdog interval. Transient property-read failures retry on
+  subsequent notifications, with suspension after three unsuccessful updates. If the
+  watchdog releases the mute because the layout became unverifiable, the controller
   re-evaluates the current output and settings once after 750 ms. A repeated layout loss
-  stays suspended. A rate below 32 kHz, such as the 16 kHz one-channel call profile a headset
-  switched to, is not recompiled: it suspends EQ and tears the tap down.
+  stays suspended. A rate below 32 kHz, such as the 16 kHz one-channel call profile a
+  headset switched to, is not recompiled: it suspends EQ and tears the tap down.
 - **Device loss is detected from notifications.** In all three Bluetooth losses the device
   reported it was no longer alive and the device list changed, while the IOProc kept being
   called with silent input, zero output channels and no error; the orphaned aggregate
@@ -352,12 +352,13 @@ denied or revoked permission that delivers zeros is not yet observable; see E6.
 - **Heartbeat.** The IOProc counts its cycles, and a watchdog on another thread checks
   the count. An idle tap gets no callbacks. The watchdog disarms while a fresh activity
   poll confirms that no other process is running output on the device. A failed poll or
-  an idle reading older than 250 ms arms it until a fresh result arrives. The tolerance is a chosen 350 ms, informed by the
-  largest gap seen around a format change, 340.5 ms when a headset left its call profile.
-  On expiry the watchdog destroys the tap before querying physical removal. A separate
-  queue samples other-process activity so a blocked HAL query cannot hold up mute release.
-  The watchdog lives in the same process, so it can act on a stuck callback but not on the whole process being
-  suspended; that case only ends when the process continues or dies.
+  an idle reading older than 250 ms arms it until a fresh result arrives. The tolerance
+  is a chosen 350 ms, informed by the largest gap seen around a format change, 340.5 ms
+  when a headset left its call profile. On expiry the watchdog destroys the tap before
+  querying physical removal. A separate queue samples other-process activity so a
+  blocked HAL query cannot hold up mute release. The watchdog lives in the same process,
+  so it can act on a stuck callback but not on the whole process being suspended; that
+  case only ends when the process continues or dies.
 - **Zeros are not a failure.** Paused players and silent media keep their output running
   and send exact zeros, throughout the observed 5.94 s pause in QuickTime's case, so a
   tap that delivers only zeros is not treated as failed and there is no back-off based
@@ -422,8 +423,9 @@ primary model, were considered and not chosen.
 
 ## Milestones
 
-Milestone 2 ships as three dependent pull requests covering settings and headroom, the
-session and renderer, and app integration. Each layer includes its tests.
+Milestone 2 merged as three dependent pull requests covering settings and headroom, the
+session and renderer, and app integration, each with its tests. Its hardware run has not
+happened yet; see [Open](#open).
 
 1. **`EqualizerCore`.** Profile format, AutoEq import, filter design, response
    evaluation and the real-time processor, with no Apple framework imports. *Shipped in
@@ -434,6 +436,10 @@ session and renderer, and app integration. Each layer includes its tests.
    session status, the controller and tap session, filtering neqMac's own aggregate, the
    usage strings, rate changes, sleep and wake, low-rate suspension, the failure checks,
    back-off and Activity events. An install without the file behaves exactly as today.
+   *Merged in [#39](https://github.com/incognitojam/dials/pull/39),
+   [#40](https://github.com/incognitojam/dials/pull/40) and
+   [#41](https://github.com/incognitojam/dials/pull/41), with its hardware verification
+   still outstanding.*
 3. **Assigning profiles in the app.** The Equalizer pane, importing a pasted AutoEq block,
    per-device on/off and the master switch, permission onboarding, status display, Retry,
    compare, the USB "What's plugged in?" question and its menu bar quick switch, built-in
@@ -470,9 +476,10 @@ so every headset result is inferred from timestamps.
 
 ### Open
 
-None of these questions has been answered. E4, E6 and E15, and the USB repeats of E1,
-E2, E3 and E5 above, should be answered before milestone 2 merges, since it equalizes
-USB outputs; several can use that branch's build.
+None of these questions has been answered. Milestone 2 merged before its hardware run, so
+the engine that equalizes USB outputs is on `main` without it. E4, E6 and E15, and the USB
+repeats of E1, E2 (unplugging a USB DAC while tapped), E3 and E5 above, are that run, and
+the next neqMac release should wait for them. They can use a build of `main`.
 
 | # | Question | What it decides | Needed by |
 | --- | --- | --- | --- |
