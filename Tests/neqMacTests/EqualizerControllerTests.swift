@@ -10,6 +10,7 @@ final class EqualizerControllerTests: XCTestCase {
         var present = true
         var rateValue: Double? = 48_000
         var fail = false
+        var playingOnFirstSession = false
         var mismatchOnFirstSession = false
         var backends: [EqualizerSessionTests.Backend] = []
         var callbacks: [() -> Void] = []
@@ -21,6 +22,7 @@ final class EqualizerControllerTests: XCTestCase {
         func tap(_ device: AudioDevice, duplex: Bool, queue: DispatchQueue, diagnostic: @escaping (String) -> Void,
                  wanted: @escaping () -> Bool, changed: @escaping () -> Void) -> TapDevice {
             let backend = EqualizerSessionTests.Backend()
+            if playingOnFirstSession && backends.isEmpty { backend.otherProcessPlaying = true }
             if mismatchOnFirstSession && backends.isEmpty {
                 backend.otherProcessPlaying = true
                 backend.layoutMismatch = true
@@ -63,13 +65,19 @@ final class EqualizerControllerTests: XCTestCase {
 
     func testPhysicalRemovalAndSameIDReconnectIgnoreOldGeneration() {
         controller.settled(output: device)
-        queue.sync {
+        let old = queue.sync {
+            let old = controller.engine.session
             XCTAssertEqual(hardware.duplex, [true])
             XCTAssertTrue(hardware.wanted[0]())
             hardware.present = false
             hardware.backends[0].deviceGone = true
             XCTAssertFalse(hardware.wanted[0]())
             hardware.callbacks[0]()
+            return old
+        }
+        guard let old else { return XCTFail("Missing initial session") }
+        old.verification.sync {}
+        queue.sync {
             XCTAssertTrue(statuses.contains(.suspended("Device removed")))
         }
         controller.settled(output: device)
@@ -81,16 +89,29 @@ final class EqualizerControllerTests: XCTestCase {
         queue.sync {
             XCTAssertEqual(hardware.backends.count, 2)
             XCTAssertFalse(hardware.wanted[0]())
-            hardware.rateValue = nil
-            hardware.callbacks[1]()
-            XCTAssertEqual(hardware.backends.count, 2)
-            XCTAssertEqual(hardware.backends[1].rates, [48_000, 48_000])
-            hardware.rateValue = 96_000
             hardware.callbacks[0]()
-            XCTAssertEqual(hardware.backends[1].rates, [48_000, 48_000])
+            XCTAssertEqual(hardware.backends[1].rates, [48_000])
             hardware.callbacks[1]()
-            XCTAssertEqual(hardware.backends[1].rates, [48_000, 48_000, 96_000])
+            XCTAssertEqual(statuses.last, .reconfiguring)
             XCTAssertTrue(messages.contains { $0.hasPrefix("Create tap: ") })
+        }
+    }
+
+    func testSettledOutputKeepsRateVerifiedByTap() throws {
+        controller.settled(output: device)
+        let session = try queue.sync {
+            let session = try XCTUnwrap(controller.engine.session)
+            hardware.rateValue = 96_000
+            hardware.backends[0].negotiatedRate = 96_000
+            hardware.callbacks[0]()
+            return session
+        }
+        session.verification.sync {}
+        queue.sync { controller.engine.observed(session, .running) { XCTFail() } }
+        controller.settled(output: device)
+        queue.sync {
+            XCTAssertEqual(statuses, [.starting, .running, .reconfiguring, .running])
+            XCTAssertEqual(session.verifiedRate, 96_000)
         }
     }
 
@@ -134,6 +155,25 @@ final class EqualizerControllerTests: XCTestCase {
             XCTAssertEqual(hardware.backends.count, 2)
             XCTAssertFalse(hardware.wanted[0]())
             XCTAssertTrue(hardware.wanted[1]())
+        }
+    }
+
+    func testStoppedIOAfterRateChangeRebuildsAtNewRateWithoutFileEdit() {
+        hardware.playingOnFirstSession = true
+        let restarted = expectation(description: "replacement applied at new rate")
+        onStatus = { [weak self] status in
+            if status == .running, self?.hardware.backends.count == 2 { restarted.fulfill() }
+        }
+        controller.settled(output: device)
+        queue.sync {
+            hardware.rateValue = 96_000
+            for _ in 0..<17 { hardware.callbacks[0]() }
+        }
+        wait(for: [restarted], timeout: 4)
+        queue.sync {
+            XCTAssertEqual(statuses.filter { $0 == .reconfiguring }.count, 1)
+            XCTAssertEqual(hardware.backends[0].calls.suffix(4), ["unmute", "stop", "destroyIO", "destroyAggregate"])
+            XCTAssertEqual(hardware.backends.dropFirst().first?.rates, [96_000])
         }
     }
 
