@@ -30,11 +30,12 @@ static inline uint32_t EQRingWrite(EQRing *ring, const AudioBufferList *list, ui
 }
 #endif
 
-// Single consumer. Read available frames, leaving the destination tail untouched.
-// Fill is the consumer's snapshot. Skip discards at most the current fill.
+// Only the consumer thread calls Read, Fill and Skip. Read returns the available
+// frames copied and zero-fills the rest of the requested output. Fill snapshots
+// queued frames. Skip returns the number discarded, at most the current fill.
 uint32_t EQRingRead(EQRing *ring, float *interleaved, uint32_t frames);
 uint64_t EQRingFill(const EQRing *ring);
-void EQRingSkip(EQRing *ring, uint64_t frames);
+uint64_t EQRingSkip(EQRing *ring, uint64_t frames);
 
 // Lifetime totals of missing read frames and dropped write frames respectively.
 // Invalid input and explicit skips do not count. Safe to sample from another thread.

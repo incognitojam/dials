@@ -35,14 +35,17 @@ void EQRingFree(EQRing *ring) {
 }
 
 uint64_t EQRingFill(const EQRing *ring) {
-    uint64_t read = atomic_load_explicit(&ring->read, memory_order_relaxed);
-    return atomic_load_explicit(&ring->written, memory_order_acquire) - read;
+    uint64_t read = atomic_load_explicit(&ring->read, memory_order_acquire);
+    uint64_t fill = atomic_load_explicit(&ring->written, memory_order_acquire) - read;
+    return fill < ring->capacity ? fill : ring->capacity;
 }
 
-void EQRingSkip(EQRing *ring, uint64_t frames) {
+uint64_t EQRingSkip(EQRing *ring, uint64_t frames) {
     uint64_t fill = EQRingFill(ring);
     uint64_t read = atomic_load_explicit(&ring->read, memory_order_relaxed);
-    atomic_store_explicit(&ring->read, read + (frames < fill ? frames : fill), memory_order_release);
+    uint64_t skipped = frames < fill ? frames : fill;
+    atomic_store_explicit(&ring->read, read + skipped, memory_order_release);
+    return skipped;
 }
 
 uint64_t EQRingUnderruns(const EQRing *ring) { return atomic_load_explicit(&ring->underruns, memory_order_relaxed); }
@@ -99,6 +102,9 @@ uint32_t EQRingRead(EQRing *ring, float *output, uint32_t frames) {
     memcpy(output, ring->samples + (size_t)offset * ring->channels, split * sizeof(float));
     memcpy(output + split, ring->samples, (size_t)(taken - first) * ring->channels * sizeof(float));
     atomic_store_explicit(&ring->read, read + taken, memory_order_release);
-    if (taken < frames) atomic_fetch_add_explicit(&ring->underruns, frames - taken, memory_order_relaxed);
+    if (taken < frames) {
+        memset(output + (size_t)taken * ring->channels, 0, (size_t)(frames - taken) * ring->channels * sizeof(float));
+        atomic_fetch_add_explicit(&ring->underruns, frames - taken, memory_order_relaxed);
+    }
     return taken;
 }

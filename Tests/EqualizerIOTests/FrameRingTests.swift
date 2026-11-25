@@ -23,19 +23,19 @@ final class FrameRingTests: XCTestCase {
                 let ring = try XCTUnwrap(EQRingCreate(8, 1))
                 defer { EQRingFree(ring) }
                 XCTAssertEqual(write(Array(repeating: 0, count: offset), to: ring), offset)
-                EQRingSkip(ring, .max)
+                XCTAssertEqual(EQRingSkip(ring, .max), UInt64(offset))
                 XCTAssertEqual(EQRingRead(ring, nil, 0), 0)
                 XCTAssertEqual(write([], to: ring), 0)
                 let samples = (0..<8).map(Float.init)
                 XCTAssertEqual(write(samples, to: ring), 8)
                 XCTAssertEqual(write([99], to: ring), 0)
                 XCTAssertEqual(EQRingOverruns(ring), 1)
-                EQRingSkip(ring, UInt64(discard))
+                XCTAssertEqual(EQRingSkip(ring, UInt64(discard)), UInt64(min(discard, 8)))
                 var output = [Float](repeating: -1, count: 9)
                 let expected = Array(samples.dropFirst(discard))
                 XCTAssertEqual(EQRingFill(ring), UInt64(expected.count))
                 XCTAssertEqual(EQRingRead(ring, &output, 9), UInt32(expected.count))
-                XCTAssertEqual(output, expected + Array(repeating: -1, count: 9 - expected.count))
+                XCTAssertEqual(output, expected + Array(repeating: 0, count: 9 - expected.count))
                 XCTAssertEqual(EQRingUnderruns(ring), UInt64(9 - expected.count))
             }
         }
@@ -56,9 +56,9 @@ final class FrameRingTests: XCTestCase {
             XCTAssertEqual(EQRingWriteBuffers(ring, &buffers, 2, 3), 2)
         }
         XCTAssertEqual(EQRingOverruns(ring), 1)
-        var output = [Float](repeating: 0, count: 4)
-        XCTAssertEqual(EQRingRead(ring, &output, 2), 2)
-        XCTAssertEqual(output, [1, 4, 2, 5])
+        var output = [Float](repeating: -1, count: 6)
+        XCTAssertEqual(EQRingRead(ring, &output, 3), 2)
+        XCTAssertEqual(output, [1, 4, 2, 5, 0, 0])
     }
 
     #if os(macOS)
