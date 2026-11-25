@@ -329,6 +329,7 @@ final class SessionEngine {
             target = output
         }
         if changed || retry {
+            refusedInputs = false
             layoutRetryToken = nil
             usedLayoutRetry = false
             requiresEdit = false

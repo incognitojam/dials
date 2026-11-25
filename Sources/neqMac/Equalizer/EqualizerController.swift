@@ -6,7 +6,6 @@ import OSLog
 import os.lock
 
 protocol OutputEqualizing: AnyObject {
-    func deviceListChanged()
     func settled(output: AudioDevice?)
     func disconnected(_ device: AudioDevice)
 }
@@ -127,6 +126,7 @@ final class EqualizerController: OutputEqualizing {
     func disconnected(_ device: AudioDevice) {
         queue.async { [self] in
             guard output?.audioObjectID == device.audioObjectID else { return }
+            engine.clearInputRefusal()
             output = nil
             lastRate = nil
             observeRate()
@@ -134,16 +134,11 @@ final class EqualizerController: OutputEqualizing {
         }
     }
 
-    func deviceListChanged() {
-        queue.async { [engine] in engine.clearInputRefusal() }
-    }
-
     func settled(output: AudioDevice?) {
         queue.async { [self] in
             let changed = self.output != output
             self.output = output
             if changed {
-                engine.clearInputRefusal()
                 lastRate = nil
                 observeRate()
             }

@@ -420,6 +420,8 @@ denied or revoked permission that delivers zeros is not yet observable; see E6.
 - **Back-off.** After a failure, neqMac does not restart the session on its own until the
   next device change or user action, and limits attempts per device, so a broken equalizer
   cannot flap the audio on and off. The limits are provisional.
+  Refusal for an output’s own input streams holds until the settings file changes, the
+  target changes, or discovery updates or removes that output’s entry.
 - **Activity.** A rate-change notification burst produces one “Equalizer reconfiguring”
   entry. Automatic restarts give the reason as an informational event. Failures and
   suspensions carry a warning. Ordinary profile edits keep their playback status.

@@ -29,7 +29,11 @@ final class EqualizerSessionTests: XCTestCase {
             calls.append(name)
             if failure == name { throw TapError(message: name) }
         }
-        func createTap() throws { try step("tap") }
+        var hasOwnInputs = false
+        func createTap() throws {
+            if hasOwnInputs { throw SessionError.ownInputs }
+            try step("tap")
+        }
         func createAggregate() throws { try step("aggregate") }
         func configure(_ profile: EQInfo, plan: EqualizerPlan) throws -> Double {
             try step("configure")

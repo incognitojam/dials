@@ -212,7 +212,6 @@ final class AppModel: ObservableObject {
         do {
             let refreshedDevices = RuleMerging.restoringKnownNames(in: try audioClient.devices(), from: policy.allRules)
             if let equalizer {
-                if devices != refreshedDevices { equalizer.deviceListChanged() }
                 for old in outputDevices where !refreshedDevices.contains(where: { $0.direction == .output && $0.audioObjectID == old.audioObjectID }) {
                     equalizer.disconnected(old)
                 }
