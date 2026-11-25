@@ -4,7 +4,8 @@ import XCTest
 @testable import EqualizerEngineCore
 
 final class SettingsTests: XCTestCase {
-    struct Device: RoutingDevice {
+    struct Device: EqualizerOutput {
+        var hasInputStreams = false
         var uid = "AppleUSBAudioEngine:Example:DAC:2000:1"
         var name = "Test DAC"
         var direction = DeviceDirection.output
@@ -28,6 +29,9 @@ final class SettingsTests: XCTestCase {
         XCTAssertEqual(try JSONDecoder().decode(EqualizerSettings.self, from: JSONEncoder().encode(settings)), settings)
         guard case let .process(_, plan) = DesiredEqualizer.resolve(valid, device: Device(), rate: 32_000) else { return XCTFail() }
         XCTAssertEqual(plan.sampleRate, 32_000)
+        guard case let .suspended(reason) = DesiredEqualizer.resolve(valid, device: Device(hasInputStreams: true), rate: 48_000)
+        else { return XCTFail("A duplex USB output must suspend") }
+        XCTAssertEqual(reason, "Outputs with their own inputs are not supported")
         for label in ["Bluetooth","Built-in","AirPlay","HDMI","DisplayPort","Virtual","Aggregate","Audio device"] {
             let device = Device(transportLabel: label)
             XCTAssertFalse(DesiredEqualizer.eligible(device))
@@ -50,14 +54,12 @@ final class SettingsTests: XCTestCase {
 }
 
 extension SettingsTests {
-    func testDuplexConsentAndInvalidCodingPath() throws {
+    func testRemovedSettingIsIgnoredAndInvalidCodingPathIsPreserved() throws {
         let data = Data(("{\"assignments\":[" + assignment + "]}").utf8)
         let settings = try JSONDecoder().decode(EqualizerSettings.self, from: data)
-        XCTAssertFalse(settings.allowsDuplex(Device()))
         let opted = assignment.replacingOccurrences(of: "\"choice\"", with: "\"allowDuplexInput\":true,\"choice\"")
         let allowed = try JSONDecoder().decode(EqualizerSettings.self, from: Data(("{\"assignments\":[" + opted + "]}").utf8))
-        XCTAssertTrue(allowed.allowsDuplex(Device()))
-        XCTAssertFalse(allowed.allowsDuplex(Device(uid: "another-output")))
+        XCTAssertEqual(allowed, settings)
         XCTAssertEqual(SettingsFile(data: Data(#"{"assignments":[{"uid":9}]}"#.utf8)), .invalid("$.assignments[0].uid · incorrect type"))
     }
 }

@@ -114,17 +114,6 @@ final class TapLayoutTests: XCTestCase {
         }
     }
 
-    func testOutputOnlyReissuedIDAndDuplexEdgeIdentity() throws {
-        XCTAssertEqual(try TapLayout.identify(initial: 22, streams: [33], physicalCount: 0, duplex: false), 33)
-        for streams: [AudioStreamID] in [[22, 4, 5], [4, 5, 22]] {
-            XCTAssertEqual(try TapLayout.identify(initial: 22, streams: streams, physicalCount: 2, duplex: true), 22)
-        }
-        for (streams, count, duplex) in [([4, 22, 5], 2, true), ([4, 5, 33], 2, true),
-                                         ([4, 22], 2, true), ([33], 0, true), ([22, 4], 0, false)] {
-            XCTAssertThrowsError(try TapLayout.identify(initial: 22, streams: streams.map(UInt32.init), physicalCount: count, duplex: duplex))
-        }
-    }
-
     func testSoleTapUUIDIgnoresCaseAndRejectsInvalidMembers() {
         let uuid = UUID()
         XCTAssertTrue(TapLayout.containsOnlyTap([uuid.uuidString.lowercased()], uuid))
@@ -134,25 +123,19 @@ final class TapLayoutTests: XCTestCase {
     }
 
     @available(macOS 14.2, *)
-    func testCreateTapChecksConsentBeforeCapture() throws {
+    func testInputStreamsDiscoveredBeforeCapturePreventTap() throws {
         final class CaptureSpy: CoreAudioTap {
             var captures = 0
             override func physicalInputsBeforeCapture() throws -> (streams: Int, widths: [UInt32]) { (1, [2]) }
             override func createProcessTap() throws { captures += 1 }
         }
         let dac = AudioDevice(audioObjectID: 90, uid: "test-dac", name: "Test DAC", direction: .output, transportType: kAudioDeviceTransportTypeUSB)
-        for consent in [false, true] {
-            let tap = CaptureSpy(output: dac, queue: .main, allowDuplexInput: consent, changed: {})
-            if consent { try tap.createTap() } else { XCTAssertThrowsError(try tap.createTap()) }
-            XCTAssertEqual(tap.captures, consent ? 1 : 0)
+        let tap = CaptureSpy(output: dac, queue: .main, changed: {})
+        XCTAssertThrowsError(try tap.createTap()) {
+            XCTAssertEqual($0.localizedDescription, "Outputs with their own inputs are not supported")
         }
-    }
-
-    func testDuplexGateRequiresExplicitConsentBeforeCapture() {
-        XCTAssertNoThrow(try TapLayout.requireConsent(inputStreams: 0, bufferWidths: [], allowed: false))
-        XCTAssertThrowsError(try TapLayout.requireConsent(inputStreams: 1, bufferWidths: [], allowed: false))
-        XCTAssertThrowsError(try TapLayout.requireConsent(inputStreams: 0, bufferWidths: [2], allowed: false))
-        XCTAssertNoThrow(try TapLayout.requireConsent(inputStreams: 2, bufferWidths: [1, 1], allowed: true))
+        XCTAssertEqual(tap.captures, 0)
+        XCTAssertThrowsError(try TapLayout.requireOutputOnly(inputStreams: 0, bufferWidths: [2]))
     }
 
     func testHandEditedBoostIsAttenuatedBeforeRendering() throws {

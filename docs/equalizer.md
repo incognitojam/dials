@@ -187,7 +187,7 @@ Transport decides eligibility first; only an eligible output can be assigned any
 
 | Transport | Eligible |
 | --- | --- |
-| USB | From milestone 2 |
+| USB | Output devices without input streams, from milestone 2 |
 | Built-in | From milestone 3, through a pasted or hand-made profile |
 | Bluetooth | Not until the split pipeline below is built and tested |
 | AirPlay, HDMI and DisplayPort | Not until E10 and E13 say how a tap behaves on them (milestone 8) |
@@ -295,16 +295,11 @@ The measured 41.5 s wait occurred before `AudioDeviceStart`. Building it:
    buffers of disabled inputs. A mismatched layout produces silence and cannot advance
    the watchdog heartbeat.
 
-A USB device with inputs requires the assignment key `allowDuplexInput` to be true. The
-default suspends before tap creation. Opt-in keeps all the identity, format and
-stream-usage checks. The macOS SDK documents that sub-taps have no streams of their own.
-On an output-only DAC the aggregate's sole input identifies the tap even if HAL reissues
-the stream ID. On a duplex DAC the tap-only stream ID must survive attachment at either
-end of the stream list, alongside one stream per physical input stream. Reconfiguration
-checks the IO-proc mask and repairs a changed mask before republishing the input
-selection. Apple's stream mask applies to the IO proc. Driver-level microphone power and
-the behaviour of the target USB DAC still need hardware verification.
-[Apple’s IO-proc stream usage](https://developer.apple.com/documentation/coreaudio/audiohardwareioprocstreamusage)
+Discovery checks the output device for physical input streams. The session checks
+again before requesting capture and on reconfiguration. On an output-only DAC,
+the aggregate's sole input identifies the tap even if HAL reissues its stream
+ID. Reconfiguration verifies the IO-proc mask and repairs a changed mask before
+republishing the input selection.
 
 Playback headroom covers DC through Nyquist. The peak search samples DC, 4096
 logarithmic intervals from 1 Hz to Nyquist, and each in-range band center. It refines
@@ -425,6 +420,8 @@ denied or revoked permission that delivers zeros is not yet observable; see E6.
 - **Back-off.** After a failure, neqMac does not restart the session on its own until the
   next device change or user action, and limits attempts per device, so a broken equalizer
   cannot flap the audio on and off. The limits are provisional.
+  Refusal for an output’s own input streams holds until the settings file changes, the
+  target changes, or discovery updates or removes that output’s entry.
 - **Activity.** A rate-change notification burst produces one “Equalizer reconfiguring”
   entry. Automatic restarts give the reason as an informational event. Failures and
   suspensions carry a warning. Ordinary profile edits keep their playback status.

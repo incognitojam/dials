@@ -10,13 +10,14 @@ final class EqualizerControllerTests: XCTestCase {
         var readError: Error?
         var present = true
         var rateValue: Double? = 48_000
+        var rateChanged: (() -> Void)?
+        var hasOwnInputs = false
         var fail = false
         var playingOnFirstSession = false
         var mismatchOnFirstSession = false
         var backends: [EqualizerSessionTests.Backend] = []
         var callbacks: [() -> Void] = []
         var wanted: [() -> Bool] = []
-        var duplex: [Bool] = []
         func isCurrent(_ device: AudioDevice) throws -> Bool {
             if let readError { throw readError }
             return present
@@ -25,8 +26,11 @@ final class EqualizerControllerTests: XCTestCase {
             guard let rateValue else { throw TapError(message: "Rate unavailable") }
             return rateValue
         }
-        func observeRate(_ device: AudioDevice, queue: DispatchQueue, changed: @escaping () -> Void) throws -> () -> Void { {} }
-        func tap(_ device: AudioDevice, duplex: Bool, queue: DispatchQueue, diagnostic: @escaping (String) -> Void,
+        func observeRate(_ device: AudioDevice, queue: DispatchQueue, changed: @escaping () -> Void) throws -> () -> Void {
+            rateChanged = changed
+            return { self.rateChanged = nil }
+        }
+        func tap(_ device: AudioDevice, queue: DispatchQueue, diagnostic: @escaping (String) -> Void,
                  wanted: @escaping () -> Bool, changed: @escaping () -> Void) -> TapDevice {
             let backend = EqualizerSessionTests.Backend()
             if playingOnFirstSession && backends.isEmpty { backend.otherProcessPlaying = true }
@@ -34,17 +38,17 @@ final class EqualizerControllerTests: XCTestCase {
                 backend.otherProcessPlaying = true
                 backend.layoutMismatch = true
             }
+            backend.hasOwnInputs = hasOwnInputs
             if fail { backend.failure = "tap" }
             backends.append(backend)
             callbacks.append(changed)
             self.wanted.append(wanted)
-            self.duplex.append(duplex)
             return backend
         }
     }
 
     let device = AudioDevice(audioObjectID: 90, uid: "test-dac", name: "Test DAC", direction: .output, transportType: kAudioDeviceTransportTypeUSB)
-    let json = #"{"enabled":true,"assignments":[{"uid":"test-dac","enabled":true,"allowDuplexInput":true,"choice":"profile","profile":{"author":"Example","type":"parametric_eq","parameters":{"gain_db":-12,"bands":[]}}}]}"#
+    let json = #"{"enabled":true,"assignments":[{"uid":"test-dac","enabled":true,"choice":"profile","profile":{"author":"Example","type":"parametric_eq","parameters":{"gain_db":-12,"bands":[]}}}]}"#
     let queue = DispatchQueue(label: "test.controller")
     let hardware = Hardware()
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -70,6 +74,106 @@ final class EqualizerControllerTests: XCTestCase {
         try FileManager.default.removeItem(at: directory)
     }
 
+    private let refused = SessionStatus.suspended("Outputs with their own inputs are not supported")
+
+    private func refuseRunningSession() throws {
+        controller.settled(output: device)
+        let session = try queue.sync {
+            let session = try XCTUnwrap(controller.engine.session)
+            hardware.backends.last?.onConfigure = { throw SessionError.ownInputs }
+            hardware.callbacks.last?()
+            return session
+        }
+        session.verification.sync {}
+        queue.sync { XCTAssertEqual(statuses.last, refused) }
+    }
+
+    @MainActor
+    func testUnrelatedDiscoveryAndRateNotificationHoldUntilTargetEntryChanges() throws {
+        let scheduler = ManualScheduler()
+        let client = TestAudioClient(devices: [device], outputID: device.audioObjectID)
+        let model = AppModel(audioClient: client, persistence: MemoryPolicyStore(), scheduler: scheduler, equalizer: controller)
+        try refuseRunningSession()
+
+        client.availableDevices.append(AudioDevice(audioObjectID: 91, uid: "other", name: "Other",
+            direction: .output, transportType: kAudioDeviceTransportTypeUSB))
+        model.handleHardwareChange()
+        scheduler.runPending()
+        try queue.sync {
+            hardware.rateValue = 96_000
+            try XCTUnwrap(hardware.rateChanged)()
+            XCTAssertEqual(hardware.backends.count, 1)
+            XCTAssertEqual(statuses.last, refused)
+        }
+
+        client.availableDevices[0].name = "Renamed DAC"
+        model.handleHardwareChange()
+        scheduler.runPending()
+        queue.sync {
+            XCTAssertEqual(hardware.backends.count, 2)
+            XCTAssertEqual(statuses.last, .running)
+        }
+    }
+
+    func testStartTimeRefusalHoldsUntilTargetDisappearsAndReturns() {
+        hardware.hasOwnInputs = true
+        controller.settled(output: device)
+        queue.sync {
+            XCTAssertEqual(statuses.suffix(2), [.starting, refused])
+            XCTAssertEqual(hardware.backends.first?.calls, [])
+            hardware.hasOwnInputs = false
+        }
+        controller.settled(output: device)
+        queue.sync {
+            XCTAssertEqual(hardware.backends.count, 1)
+            XCTAssertEqual(statuses.last, refused)
+        }
+        controller.disconnected(device)
+        controller.settled(output: device)
+        queue.sync {
+            XCTAssertEqual(hardware.backends.count, 2)
+            XCTAssertEqual(statuses.last, .running)
+        }
+    }
+
+    func testSettingsEditRetriesWhileHeldAndMasterSwitchRestoresProcessing() throws {
+        try refuseRunningSession()
+        func edit(_ contents: String, expecting status: SessionStatus) throws {
+            let observed = expectation(description: "settings change produces \(status)")
+            queue.sync { onStatus = { if $0 == status { observed.fulfill() } } }
+            try Data(contents.utf8).write(to: url, options: .atomic)
+            wait(for: [observed], timeout: 3)
+            queue.sync { onStatus = nil }
+        }
+        queue.sync { hardware.hasOwnInputs = true }
+        let profileEdit = json.replacingOccurrences(of: "-12", with: "-9")
+        try edit(profileEdit, expecting: refused)
+        queue.sync {
+            XCTAssertEqual(hardware.backends.count, 2)
+            XCTAssertEqual(hardware.backends.last?.calls, [])
+            XCTAssertEqual(statuses.suffix(2), [.starting, refused])
+        }
+
+        let disabled = profileEdit.replacingOccurrences(of: #"{"enabled":true"#, with: #"{"enabled":false"#)
+        try edit(disabled, expecting: .idle)
+        queue.sync { hardware.hasOwnInputs = false }
+        try edit(profileEdit, expecting: .running)
+        queue.sync {
+            XCTAssertEqual(hardware.backends.count, 3)
+            XCTAssertEqual(statuses.last, .running)
+        }
+    }
+
+    func testDuplexUSBOutputSuspendsBeforeBuildingSession() {
+        var duplex = device
+        duplex.hasInputStreams = true
+        controller.settled(output: duplex)
+        queue.sync {
+            XCTAssertEqual(statuses.last, .suspended("Outputs with their own inputs are not supported"))
+            XCTAssertTrue(hardware.backends.isEmpty)
+        }
+    }
+
     func testCurrentOutputReadFailureExplainsIdle() {
         hardware.readError = TapError(message: "default output unavailable")
         controller.settled(output: device)
@@ -83,7 +187,6 @@ final class EqualizerControllerTests: XCTestCase {
         controller.settled(output: device)
         let old = queue.sync {
             let old = controller.engine.session
-            XCTAssertEqual(hardware.duplex, [true])
             XCTAssertTrue(hardware.wanted[0]())
             hardware.present = false
             hardware.backends[0].deviceGone = true

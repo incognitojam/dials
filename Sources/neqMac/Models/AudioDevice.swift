@@ -1,4 +1,5 @@
 import CoreAudio
+import EqualizerEngineCore
 import Foundation
 import RoutingCore
 
@@ -18,12 +19,13 @@ extension DeviceDirection {
     }
 }
 
-struct AudioDevice: RoutingDevice, Identifiable, Equatable, Sendable {
+struct AudioDevice: EqualizerOutput, Identifiable, Equatable, Sendable {
     let audioObjectID: AudioObjectID
     let uid: String
     var name: String
     let direction: DeviceDirection
     let transportType: UInt32
+    var hasInputStreams = false
 
     var id: String { "\(direction.rawValue):\(uid)" }
 

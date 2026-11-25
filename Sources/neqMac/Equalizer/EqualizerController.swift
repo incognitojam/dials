@@ -15,7 +15,7 @@ protocol EqualizerHardware {
     func isCurrent(_ device: AudioDevice) throws -> Bool
     func rate(_ device: AudioDevice) throws -> Double
     func observeRate(_ device: AudioDevice, queue: DispatchQueue, changed: @escaping () -> Void) throws -> () -> Void
-    func tap(_ device: AudioDevice, duplex: Bool, queue: DispatchQueue, diagnostic: @escaping (String) -> Void,
+    func tap(_ device: AudioDevice, queue: DispatchQueue, diagnostic: @escaping (String) -> Void,
              wanted: @escaping () -> Bool, changed: @escaping () -> Void) -> TapDevice
 }
 
@@ -44,9 +44,9 @@ struct SystemEqualizerHardware: EqualizerHardware {
         return listener.cancel
     }
 
-    func tap(_ device: AudioDevice, duplex: Bool, queue: DispatchQueue, diagnostic: @escaping (String) -> Void,
+    func tap(_ device: AudioDevice, queue: DispatchQueue, diagnostic: @escaping (String) -> Void,
              wanted: @escaping () -> Bool, changed: @escaping () -> Void) -> TapDevice {
-        CoreAudioTap(output: device, queue: queue, allowDuplexInput: duplex, diagnostic: diagnostic,
+        CoreAudioTap(output: device, queue: queue, diagnostic: diagnostic,
                      stillWanted: wanted, changed: changed)
     }
 }
@@ -126,6 +126,7 @@ final class EqualizerController: OutputEqualizing {
     func disconnected(_ device: AudioDevice) {
         queue.async { [self] in
             guard output?.audioObjectID == device.audioObjectID else { return }
+            engine.clearInputRefusal()
             output = nil
             lastRate = nil
             observeRate()
@@ -161,8 +162,6 @@ final class EqualizerController: OutputEqualizing {
             next = .invalid(error.localizedDescription)
         }
         guard bytes != fileBytes || next != file else { return }
-        if let output, let session = engine.session, case let .loaded(old) = file, case let .loaded(new) = next,
-           old.allowsDuplex(output) && !new.allowsDuplex(output) { engine.finish(session, reason: .idle) }
         fileBytes = bytes
         file = next
         observeRate()
@@ -205,8 +204,7 @@ final class EqualizerController: OutputEqualizing {
         engine.reconcile(desired, output: current, retry: retry) { device in
             let token = UUID()
             generation = token
-            guard case let .loaded(settings) = file else { preconditionFailure("Processing requires settings") }
-            return hardware.tap(device, duplex: settings.allowsDuplex(device), queue: queue, diagnostic: diagnostic,
+            return hardware.tap(device, queue: queue, diagnostic: diagnostic,
                                 wanted: { [weak self, hardware, url, file] in
                 guard let self, generation == token, engine.session != nil, !asleep.withLock({ $0 }) else { return false }
                 do { return try hardware.isCurrent(device) && SettingsFile(at: url) == file }

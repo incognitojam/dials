@@ -96,13 +96,15 @@ final class CoreAudioClient: AudioDeviceClient {
             )) ?? kAudioDeviceTransportTypeUnknown
 
             var result: [AudioDevice] = []
-            if hasStreams(deviceID: id, scope: kAudioDevicePropertyScopeInput) {
+            let hasInputs = hasStreams(deviceID: id, scope: kAudioDevicePropertyScopeInput)
+            if hasInputs {
                 result.append(AudioDevice(
                     audioObjectID: id,
                     uid: uid,
                     name: name,
                     direction: .input,
-                    transportType: transport
+                    transportType: transport,
+                    hasInputStreams: hasInputs
                 ))
             }
             if hasStreams(deviceID: id, scope: kAudioDevicePropertyScopeOutput) {
@@ -111,7 +113,8 @@ final class CoreAudioClient: AudioDeviceClient {
                     uid: uid,
                     name: name,
                     direction: .output,
-                    transportType: transport
+                    transportType: transport,
+                    hasInputStreams: hasInputs
                 ))
             }
             return result

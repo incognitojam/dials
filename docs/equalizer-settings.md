@@ -5,7 +5,8 @@ output. Create `~/Library/Application Support/neqMac/equalizer.json` and replace
 example UID with the output UID from your routing rule. Keep this file private. The
 first matching assignment in file order wins. Matching uses the routing rules for exact
 UIDs, serial-less USB devices moved between ports, and named AirPlay devices. Only USB
-outputs are eligible.
+outputs without their own input streams are eligible. See
+[Which outputs get an equalizer](equalizer.md#which-outputs-get-an-equalizer).
 
 ```json
 {
@@ -16,7 +17,6 @@ outputs are eligible.
       "name": "Test DAC",
       "transport": "USB",
       "choice": "profile",
-      "allowDuplexInput": false,
       "enabled": true,
       "profile": {
         "type": "parametric_eq",
@@ -34,14 +34,8 @@ outputs are eligible.
 }
 ```
 
-USB outputs with input streams require `"allowDuplexInput": true` on their own
-assignment. It defaults to false. With the default, Activity shows the device stream and
-channel counts before suspending. Opting in permits a verification attempt. The tap
-stream must retain its identity when neqMac attaches the output, its format and channels
-must match, and the aggregate must accept the tap-only IO-proc input mask. Activity
-records the selected stream, buffer range and build timings. An unverifiable layout
-suspends processing. On an output-only DAC the sole aggregate input can have a new stream
-ID. Its format, channels and input mask must still verify.
+Activity shows
+“Outputs with their own inputs are not supported” for a duplex output.
 
 Both enabled switches default to false. The assignment list defaults to empty. Each
 assignment needs a nonempty UID and a choice. Name and transport default to empty

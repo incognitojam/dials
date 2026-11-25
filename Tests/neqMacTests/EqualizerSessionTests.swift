@@ -12,7 +12,7 @@ final class EqualizerSessionTests: XCTestCase {
         var rates: [Double] = []
         var failure: String?
         var onStop: (() -> Void)?
-        var onConfigure: (() -> Void)?
+        var onConfigure: (() throws -> Void)?
         var deviceGone = false
         var onRemovalRead: (() -> Void)?
         var removed: Bool { onRemovalRead?(); return deviceGone }
@@ -29,12 +29,16 @@ final class EqualizerSessionTests: XCTestCase {
             calls.append(name)
             if failure == name { throw TapError(message: name) }
         }
-        func createTap() throws { try step("tap") }
+        var hasOwnInputs = false
+        func createTap() throws {
+            if hasOwnInputs { throw SessionError.ownInputs }
+            try step("tap")
+        }
         func createAggregate() throws { try step("aggregate") }
         func configure(_ profile: EQInfo, plan: EqualizerPlan) throws -> Double {
             try step("configure")
             rates.append(plan.sampleRate)
-            onConfigure?()
+            try onConfigure?()
             return negotiatedRate ?? plan.sampleRate
         }
         func createIO() throws { try step("io") }
@@ -49,6 +53,24 @@ final class EqualizerSessionTests: XCTestCase {
     let profile = EQInfo(author: "Example", parameters: ParametricEQ(gainDB: -6, bands: []))
     let teardown = ["unmute", "stop", "destroyIO", "destroyAggregate"]
     var desired: DesiredEqualizer { .process(profile, try! EqualizerPlan(profile.parameters, sampleRate: 48_000)) }
+
+    func testInputStreamsAppearingDuringPlaybackSuspendImmediately() throws {
+        let owner = DispatchQueue(label: "test.eligibility")
+        let engine = SessionEngine(queue: owner) { _ in }
+        let audio = Backend()
+        let session = try owner.sync {
+            engine.reconcile(desired, output: output) { _ in audio }
+            audio.onConfigure = { throw SessionError.ownInputs }
+            engine.formatChanged()
+            return try XCTUnwrap(engine.session)
+        }
+        session.verification.sync {}
+        owner.sync {
+            XCTAssertNil(engine.session)
+            XCTAssertEqual(engine.status, .suspended("Outputs with their own inputs are not supported"))
+            XCTAssertEqual(Array(audio.calls.suffix(4)), teardown)
+        }
+    }
 
     func testPartialBuildAndFailureBackoff() {
         for (failure, cleanup) in [("tap", []), ("aggregate", ["unmute"]), ("configure", ["unmute", "destroyAggregate"]),

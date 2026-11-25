@@ -14,21 +14,16 @@ package struct EqualizerSettings: Codable, Equatable {
         assignments = try c.contains(.assignments) ? c.decode([Assignment].self, forKey: .assignments) : []
     }
 
-    package func allowsDuplex(_ device: any RoutingDevice) -> Bool {
-        assignments.first { $0.matches(device) }?.allowDuplexInput == true
-    }
-
     package struct Assignment: Codable, Equatable {
         let uid: String
         let name: String
         let transport: String
         let enabled: Bool
         enum Choice: String, Codable { case profile, none }
-        let allowDuplexInput: Bool
         let choice: Choice
         let profile: EQInfo?
 
-        enum CodingKeys: CodingKey { case uid, name, transport, enabled, choice, profile, allowDuplexInput }
+        enum CodingKeys: CodingKey { case uid, name, transport, enabled, choice, profile }
 
         package init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -39,7 +34,6 @@ package struct EqualizerSettings: Codable, Equatable {
             name = try c.contains(.name) ? c.decode(String.self, forKey: .name) : ""
             transport = try c.contains(.transport) ? c.decode(String.self, forKey: .transport) : ""
             enabled = try c.contains(.enabled) && c.decode(Bool.self, forKey: .enabled)
-            allowDuplexInput = try c.contains(.allowDuplexInput) && c.decode(Bool.self, forKey: .allowDuplexInput)
             choice = try c.decode(Choice.self, forKey: .choice)
             if choice == .none && c.contains(.profile) {
                 throw DecodingError.dataCorruptedError(forKey: .profile, in: c, debugDescription: "Unexpected profile for none")
@@ -87,19 +81,27 @@ package enum SettingsFile: Equatable {
 
 }
 
+package protocol EqualizerOutput: RoutingDevice {
+    var hasInputStreams: Bool { get }
+}
+
 package enum DesiredEqualizer {
     case off, suspended(String), process(EQInfo, EqualizerPlan)
 
-    package static func eligible(_ device: any RoutingDevice) -> Bool {
-        device.direction == .output && device.transportLabel == "USB"
+    package static let ownInputsReason = "Outputs with their own inputs are not supported"
+
+    package static func eligible(_ device: any EqualizerOutput) -> Bool {
+        device.direction == .output && device.transportLabel == "USB" && !device.hasInputStreams
     }
 
-    package static func resolve(_ file: SettingsFile, device: (any RoutingDevice)?, rate: Double?) -> Self {
+    package static func resolve(_ file: SettingsFile, device: (any EqualizerOutput)?, rate: Double?) -> Self {
         if case let .invalid(reason) = file { return .suspended("Invalid equalizer settings: " + reason) }
         guard case let .loaded(settings) = file, settings.enabled, let device,
               let assignment = settings.assignments.first(where: { $0.matches(device) }),
               assignment.enabled, let profile = assignment.profile else { return .off }
-        guard eligible(device) else { return .suspended("Unsupported output transport") }
+        guard eligible(device) else {
+            return .suspended(device.transportLabel == "USB" && device.hasInputStreams ? ownInputsReason : "Unsupported output transport")
+        }
         guard let rate, rate.isFinite else { return .suspended("Output format unavailable") }
         guard rate >= 32_000 else { return .suspended("Output rate below 32 kHz") }
         do { return .process(profile, try EqualizerPlan.playback(profile.parameters, sampleRate: rate)) }
