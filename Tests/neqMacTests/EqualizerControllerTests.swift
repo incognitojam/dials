@@ -68,6 +68,28 @@ final class EqualizerControllerTests: XCTestCase {
         try FileManager.default.removeItem(at: directory)
     }
 
+    func testMidSessionInputRefusalWaitsForNewDiscoveryOrTarget() throws {
+        controller.settled(output: device)
+        for changeList in [true, false] {
+            let session = try queue.sync {
+                let session = try XCTUnwrap(controller.engine.session)
+                hardware.backends.last?.onConfigure = { throw SessionError.ownInputs }
+                hardware.callbacks.last?()
+                return session
+            }
+            session.verification.sync {}
+            let previous = queue.sync { hardware.backends.count }
+            controller.settled(output: device)
+            queue.sync {
+                XCTAssertEqual(hardware.backends.count, previous)
+                XCTAssertEqual(statuses.last, .suspended("Outputs with their own inputs are not supported"))
+            }
+            if changeList { controller.deviceListChanged() } else { controller.settled(output: nil) }
+            controller.settled(output: device)
+            queue.sync { XCTAssertEqual(hardware.backends.count, previous + 1) }
+        }
+    }
+
     func testDuplexUSBOutputSuspendsBeforeBuildingSession() {
         var duplex = device
         duplex.hasInputStreams = true

@@ -237,6 +237,7 @@ final class SessionEngine {
     private let queue: DispatchQueue
     private var checking = false
     private var dirty = false
+    private var refusedInputs = false
     private var requiresEdit = false
     private var layoutRetryToken: UUID?
     private var usedLayoutRetry = false
@@ -253,6 +254,8 @@ final class SessionEngine {
         self.didTearDown = didTearDown
         self.report = report
     }
+
+    func clearInputRefusal() { refusedInputs = false }
 
     func resumeLayoutRetry(_ token: UUID) -> Bool {
         guard layoutRetryToken == token else { return false }
@@ -337,6 +340,7 @@ final class SessionEngine {
             return
         }
         if retry { failures.removeValue(forKey: output.uid) }
+        if refusedInputs { publish(.suspended(DesiredEqualizer.ownInputsReason)); return }
         if requiresEdit { return }
         if !changed && !retry, case .failed = status { return }
         if failures[output.uid, default: 0] >= 2 {
@@ -383,6 +387,7 @@ final class SessionEngine {
         guard old === session else { return }
         let result = old.monitor.end(reason)
         if result == .suspended("Tap input layout no longer verified") { requiresEdit = true }
+        if result == .suspended(DesiredEqualizer.ownInputsReason) { refusedInputs = true }
         session = nil
         applied = nil
         checking = false

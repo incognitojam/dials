@@ -13,6 +13,8 @@ final class AppModelTests: XCTestCase {
 
     func testEqualizerFollowsSettledDefaultWithRoutingDisabled() {
         final class Recorder: OutputEqualizing {
+            var listChanges = 0
+            func deviceListChanged() { listChanges += 1 }
             var outputs: [AudioDevice?] = []
             var disconnectedIDs: [AudioObjectID] = []
             func settled(output: AudioDevice?) { outputs.append(output) }
@@ -23,12 +25,14 @@ final class AppModelTests: XCTestCase {
         let client = TestAudioClient(devices: [first, second], outputID: first.audioObjectID)
         let eq = Recorder()
         let model = AppModel(audioClient: client, persistence: MemoryPolicyStore(), scheduler: scheduler, equalizer: eq)
+        let initialChanges = eq.listChanges
         model.handleHardwareChange()
         client.outputID = second.audioObjectID
         model.handleHardwareChange()
         XCTAssertTrue(eq.outputs.isEmpty)
         scheduler.runPending()
         XCTAssertEqual(eq.outputs, [second])
+        XCTAssertEqual(eq.listChanges, initialChanges)
         client.availableDevices = [first]
         model.handleHardwareChange()
         XCTAssertEqual(eq.disconnectedIDs, [second.audioObjectID])
@@ -36,6 +40,7 @@ final class AppModelTests: XCTestCase {
         model.handleHardwareChange()
         scheduler.runPending()
         XCTAssertEqual(eq.outputs, [second, second])
+        XCTAssertEqual(eq.listChanges, initialChanges + 2)
         XCTAssertTrue(client.selections.isEmpty)
     }
 

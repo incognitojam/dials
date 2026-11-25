@@ -2,4 +2,4 @@
 "@dials/neqmac": patch
 ---
 
-The equalizer now skips USB outputs that have their own input streams.
+USB outputs with their own input streams are not supported by the equalizer.

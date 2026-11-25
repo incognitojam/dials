@@ -5,7 +5,8 @@ output. Create `~/Library/Application Support/neqMac/equalizer.json` and replace
 example UID with the output UID from your routing rule. Keep this file private. The
 first matching assignment in file order wins. Matching uses the routing rules for exact
 UIDs, serial-less USB devices moved between ports, and named AirPlay devices. Only USB
-outputs are eligible.
+outputs without their own input streams are eligible. See
+[Which outputs get an equalizer](equalizer.md#which-outputs-get-an-equalizer).
 
 ```json
 {
@@ -33,8 +34,7 @@ outputs are eligible.
 }
 ```
 
-Only USB output devices without input streams can use EQ. A DAC that exposes its
-microphone as a separate Core Audio device can still qualify. Activity shows
+Activity shows
 “Outputs with their own inputs are not supported” for a duplex output.
 
 Both enabled switches default to false. The assignment list defaults to empty. Each
