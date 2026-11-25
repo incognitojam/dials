@@ -89,14 +89,17 @@ jobs:
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.core != 'false' }}
     runs-on: ubuntu-latest
-    container: swift:6.4.3-noble
+    container:
+      image: swift:6.4.3-noble
+      # TSan may need personality(ADDR_NO_RANDOMIZE) to reserve its shadow memory.
+      options: --security-opt seccomp=unconfined
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
       - name: Run portable tests
         run: swift test
       - name: Check the concurrent frame ring with ThreadSanitizer
-        run: scripts/test-frame-ring-tsan.sh "$RUNNER_TEMP/frame-ring-tsan"
+        run: sh -x scripts/test-frame-ring-tsan.sh "$RUNNER_TEMP/frame-ring-tsan"
 
   macos:
     name: macOS
