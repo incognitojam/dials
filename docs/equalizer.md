@@ -279,8 +279,7 @@ fails.
 ### Lifecycle
 
 A session is built on its own serial queue, never on the main thread, because
-[a permission prompt can hold up construction](audio-taps.md#two-things-not-to-repeat).
-The measured 41.5 s wait occurred before `AudioDeviceStart`. Building it:
+[a permission prompt can hold up construction](audio-taps.md#the-first-prompt).
 
 1. Translate neqMac's process ID to a Core Audio process object, retrying, since this
    fails transiently just after launch (measured; the retry budget is provisional).
@@ -311,8 +310,7 @@ A failure at any step must destroy whatever the earlier steps created (decided).
 rest of this section follows from the measurements in [What the tap does at its
 edges](audio-taps.md#what-the-tap-does-at-its-edges), made on the built-in speakers and
 on a Bluetooth headset, first by timestamps and later with a microphone in the earcup.
-They are decided unless marked otherwise; the USB repeats listed in [Hardware
-experiments](#hardware-experiments) could still change them.
+[The USB runs](#usb-output-on-macos-2701) tested these rules on a DAC.
 
 - **The IOProc never blocks.** A stuck callback keeps the output silent until the tap is
   destroyed, a frozen process keeps it silent until it is continued or dies, and
@@ -381,16 +379,10 @@ and its release go through the processor's crossfade, which reduces switching ar
 
 ### Permission
 
-The tap needs two permissions, microphone and system audio capture, and both usage
-strings must be in neqMac's `Info.plist` (measured). A user who only routes must never
-see either prompt, so neqMac never asks at launch; the first request follows the user
-action described in [Desired processing and session
-status](#desired-processing-and-session-status). There appears to be no public way to
-check audio-capture authorisation in advance, and what happens when it is revoked
-mid-session is unknown; E6 answers both. On one fresh signing identity, building a
-session took 41.5 s while the prompt was on screen and completed once it was answered;
-the logged `AudioDeviceStart` took 0.118 ms, so the wait came before it, and which call
-blocked is not known.
+An enabled assignment authorizes the capture request as described in
+[Desired processing and session status](#desired-processing-and-session-status).
+See [System audio capture permission](audio-taps.md#system-audio-capture-permission)
+for the observed grant and silent failure modes. Revocation remains open (E6).
 
 ### Failure
 
@@ -468,9 +460,8 @@ orange error banner, and its first sentence is what the user hears — that audi
 playing normally, without correction — with **Retry** or an action to open System
 Settings.
 
-The permission request is preceded by a short explanation of the two system prompts that
-follow: audio is processed on the Mac and never recorded or sent anywhere, routing works
-whether or not it is allowed, and if processing fails, audio plays without EQ.
+Before requesting system audio capture, the app will explain that audio is processed
+locally and that routing also works without the grant.
 
 Profile chips on the routing rows as the main surface, and a headphone library as the
 primary model, were considered and not chosen.
@@ -478,8 +469,8 @@ primary model, were considered and not chosen.
 ## Milestones
 
 Milestone 2 merged as three dependent pull requests covering settings and headroom, the
-session and renderer, and app integration, each with its tests. Its hardware run has not
-happened yet; see [Open](#open).
+session and renderer, and app integration. The [USB hardware
+runs](#usb-output-on-macos-2701) cover the original engine and its recovery fixes.
 
 1. **`EqualizerCore`.** Profile format, AutoEq import, filter design, response
    evaluation and the real-time processor, with no Apple framework imports. *Shipped in
@@ -492,8 +483,9 @@ happened yet; see [Open](#open).
    back-off and Activity events. An install without the file behaves exactly as today.
    *Merged in [#39](https://github.com/incognitojam/dials/pull/39),
    [#40](https://github.com/incognitojam/dials/pull/40) and
-   [#41](https://github.com/incognitojam/dials/pull/41), with its hardware verification
-   still outstanding.*
+   [#41](https://github.com/incognitojam/dials/pull/41). The USB runs led to
+   [#46](https://github.com/incognitojam/dials/pull/46) and
+   [#47](https://github.com/incognitojam/dials/pull/47).*
 3. **Assigning profiles in the app.** The Equalizer pane, importing a pasted AutoEq block,
    per-device on/off and the master switch, permission onboarding, status display, Retry,
    compare, the USB "What's plugged in?" question and its menu bar quick switch, built-in
@@ -526,19 +518,110 @@ state.
 
 | # | Result | What remains |
 | --- | --- | --- |
-| E1 | Build and teardown overlap the original and the marker for up to about 45 ms on the speakers, with no silent gap, in 7 builds across three teardown orders; both aggregate-first teardowns failed to destroy the IOProc. Retarget order made no audible difference in the two retargets that ended on the speakers. On the headset, in the cup, building mid-playback left 220–235 ms of silence (3 readable runs of 6) and tearing down 15–20 ms (3 of 6). | Repeat on a USB DAC; the programme skip at teardown on Bluetooth, with real programme material |
-| E2, Bluetooth | One power-off and two software disconnects left the IOProc running with silent input and no error; the loss arrived as notifications. The speakers the audio moved to were not muted. The orphaned aggregate re-adopted the reconnected headset; in the cup, audio played to it was normal, neither muted nor doubled, in 4 of 4 runs. | Unplugging a USB DAC while tapped |
-| E3 | A rate change left 108–184 ms between callbacks and the IOProc resumed at the new rate; the call profile changed the channel count and buffer size. Recompile while the device stays eligible, never rebuild. In the cup, a tap kept through call mode dropped out about once a second and leaked 35–50 ms of unprocessed audio when the call ended. | Repeat on a USB DAC |
-| E5 | Ending the process without teardown released the mute in all 11 runs, and no tap or aggregate was left after any of the 15. A frozen process kept the output silent while stopped; a stuck callback kept it silent until the tap was destroyed, while `AudioDeviceStop` waited 2.5 s behind it. | Repeat on a USB DAC |
+| E1 | Build and teardown overlap the original and the marker for up to about 45 ms on the speakers, with no silent gap, in 7 builds across three teardown orders; both aggregate-first teardowns failed to destroy the IOProc. Retarget order made no audible difference in the two retargets that ended on the speakers. On the headset, in the cup, building mid-playback left 220–235 ms of silence (3 readable runs of 6) and tearing down 15–20 ms (3 of 6). | The programme skip at teardown on Bluetooth, with real programme material |
+| E2, Bluetooth | One power-off and two software disconnects left the IOProc running with silent input and no error; the loss arrived as notifications. The speakers the audio moved to were not muted. The orphaned aggregate re-adopted the reconnected headset; in the cup, audio played to it was normal, neither muted nor doubled, in 4 of 4 runs. | USB unplug results below |
+| E3 | A rate change left 108–184 ms between callbacks and the IOProc resumed at the new rate; the call profile changed the channel count and buffer size. In the cup, a tap kept through call mode dropped out about once a second and leaked 35–50 ms of unprocessed audio when the call ended. | USB results below |
+| E5 | Ending the process without teardown released the mute in all 11 runs, and no tap or aggregate was left after any of the 15. A frozen process kept the output silent while stopped; a stuck callback kept it silent until the tap was destroyed, while `AudioDeviceStop` waited 2.5 s behind it. | USB results below |
 | E8 | In the cup, the combined aggregate added 227.5 ms at the ear on Bluetooth at the default buffer (sd 0.14 and 0.07 ms over 12 and 8 cycles in two runs) and 215.9 ms at 256 frames. Cause, from timestamps: a tap-only aggregate receives a burst about 6 ms after the player produces it, the combined aggregate about 211 ms after, a shift of about 205 ms close to the headset's declared 203.2 ms. A split pipeline (tap-only capture, ring, separate output IOProc) added 26–32 ms at the ear in three readable one-buffer cycles of one sweep, with 31.4 ms in a separate one-minute run that logged no underruns or overruns. Compensating with the sub-tap's extra input latency gave 24.3 ms, but over-compensating by 512 frames crashed `coreaudiod` once. Sound lagging picture is predicted from these, not measured. | Moved to E16 |
 | E7 | Paused and silent players send exact zeros while running output; an idle tap gets no callbacks. Zeros are not a failure signal. | None for the decision |
 
-### Open
+### USB output on macOS 27.0.1
 
-None of these questions has been answered. Milestone 2 merged before its hardware run, so
-the engine that equalizes USB outputs is on `main` without it. E4, E6 and E15, and the USB
-repeats of E1, E2 (unplugging a USB DAC while tapped), E3 and E5 above, are that run, and
-the next neqMac release should wait for them. They can use a build of `main`.
+#### First run on 2026-11-20, before #46 and #47
+
+One DAC exposed its microphone and output as separate Core Audio devices. The
+output had one stereo stream and no input streams.
+
+- **Engine stayed idle (fixed in [#46](https://github.com/incognitojam/dials/pull/46)).**
+  HAL reported the wrong size for the default-output ID read. Swift had inferred an
+  optional ID, whose storage takes five bytes. The remaining trials used the same
+  build (`05ebc0a`) with four scalar reads corrected locally.
+- **Selection and startup.** The sole tap input retained its stream ID across
+  attachment and idle rate changes. At 48 kHz it was interleaved Float32 stereo,
+  starting at channel 1, with a 512-frame IO buffer and verified tap-only mask.
+  A warm file-triggered build took about 57 ms. The [first prompt](audio-taps.md#the-first-prompt)
+  measurements cover the build that requested capture access.
+- **Acoustic response.** A microphone between closed headphone cups recorded
+  −36 dBFS tones. With a 1 kHz, 12 dB/octave low-pass and −12 dB gain, measured
+  changes at 250 Hz and 1 kHz were approximately −11.7 and −14.7 dB (design
+  −12.0 and −15.0). The 4 kHz estimate was about 37 dB down (design 36.5 dB),
+  but the processed tone was within 2 dB of the measured noise floor. At 8 kHz the
+  tone was 14 dB above the floor and about 43 dB below direct (design 49.8 dB).
+  Across three switches, enabling produced a 10–20 ms dip and disabling about 40 ms. No
+  high-frequency burst stood out in the 10 ms analysis windows. The processed
+  level arrived 275 and 295 ms after the two saves that enabled EQ.
+- **Clock changes (fixed in [#47](https://github.com/incognitojam/dials/pull/47)).**
+  The first run measured a 0.70–0.78 s gap with or without EQ using a 10 dB
+  drop in the recorded tone. In all three playing transitions (48→44.1, 48→96,
+  96→48 kHz) the 350 ms watchdog released the tap. Playback stayed at the
+  unprocessed level until a file edit.
+  Verification occupied the session queue for about 660 ms. Two trials also
+  logged aggregate StartIO error 35. The idle 48→44.1→96→48 kHz sequence kept
+  the session and its processing. Each idle change logged 13 tap formats and
+  13 input verifications. The playing changes logged two formats each and two,
+  two and one verifications respectively. See the [re-run](#re-run-on-2026-11-25)
+  for recovery with the fix.
+- **Process termination.** From measured level transitions, quit, SIGTERM and
+  SIGKILL restored direct audio in about 230, 90 and 110 ms respectively, with
+  at most 30 ms of silence and no observed burst (one run each). SIGSTOP kept
+  the output silent for the two-second stop. After SIGCONT, processing returned
+  in about 60 ms. One “Repeated equalizer IO overloads” message followed about
+  a second after SIGCONT.
+- **Unplug.** Two unplugs included one during playback. The app reported one
+  removal on loss. Fallback speaker playback was confirmed by ear only. On
+  replug the DAC became default and a verified session restarted in about 54 ms
+  without a file edit. The cup recording measured −14.9 dB at 1 kHz after replug.
+- **Watchdog and settings.** Outside the playing rate changes, starts/stops, two
+  mid-tone player IO restarts, eight seconds of exact zeros and idle periods
+  caused no observed false failure. Absent or disabled settings and an explicit
+  “none” assignment stayed idle. Truncated
+  JSON, a missing field, a wrong type and an empty UID produced Activity reasons.
+  A +6 dB preamp and +6 dB peak, a +12 dB peak at 5 Hz, a +24 dB shelf at
+  8 Hz, and +30 dB preamp alone reported 12, 12, 24 and 30 dB headroom.
+
+#### Re-run on 2026-11-25
+
+With both fixes on the same DAC and an enabled settings file already present, the
+first `running` status came 2.72 s after the first app log entry. IO proc creation
+took 2.52 s of that time. Whether a prompt appeared was not recorded. The 1 kHz
+tone measured about 15 dB below direct playback, within roughly 1 dB of the
+design. Steady passages were 14.2–14.6 dB down at 48 kHz and 15.7–16.1 dB
+down at 44.1 and 96 kHz. [What it costs](audio-taps.md#what-it-costs) gives the
+separate burst measurement of playback latency.
+
+During continuous playback the DAC went from 48 to 44.1 kHz and back, to 96 kHz
+and back, then to 44.1 kHz and back. All six changes returned to `running` and
+the corrected tone level without a file edit. HAL logged `_StartIO` error 35 at
+every playing change and one of the two idle changes. None produced a watchdog
+stall. Both idle changes (48→44.1→48 kHz) returned to `running`, and the next
+tone at each rate had the correction.
+
+In 50 ms microphone windows the tone stayed more than 3 dB below its steady level
+for about 750–850 ms with EQ and 750–800 ms in four untapped changes. On four of the
+six playing changes, short portions of the returning tone reached the
+direct-playback level before the correction settled. Counting 10 ms windows within 6
+dB of the direct tone at 1 kHz gave about 20–80 ms per affected change. None
+exceeded the direct recording at 1 kHz. This criterion can also include partially
+processed audio.
+
+One unplug suspended EQ with “Device removed”. When the DAC reappeared, EQ was
+running again within about a second. A fresh tone on the DAC had the correction.
+This re-run did not include a second unplug. The player was pinned to the DAC,
+so following the system default away from it and back remains untested.
+
+These small counts describe one DAC. Neither session tested a denied or unanswered
+permission prompt, sleep and wake, EQ with automatic routing enabled, rates below
+32 kHz, or inspection for leftover private taps after USB teardown.
+The code taps and mutes only output stream 0, so other output streams are
+expected to pass through unprocessed. This was not measured. Multi-buffer,
+more-than-stereo and non-interleaved layouts have only run against test doubles.
+
+Several equalized recordings, including the first tone in a fresh session, had
+brief broadband transients about 1–4 times per second during steady playback.
+They were absent from the direct controls and occurred away from rate changes.
+Their source remains unknown.
+
+### Open
 
 | # | Question | What it decides | Needed by |
 | --- | --- | --- | --- |
@@ -550,5 +633,5 @@ the next neqMac release should wait for them. They can use a build of `main`.
 | E12 | Does holding the Sony control channel open disturb playback, and is state broadcast with multipoint on? On firmware 3.0.1, does cycling the earcup button produce change notifications? | Whether following noise cancelling is safe, and whether notifications can be relied on on 3.0.1 | 6 |
 | E13 | A soundbar over HDMI at 5.1: what layout does the tap deliver, and does one chain per channel sound right? | Multichannel outputs | 8 |
 | E14 | Does the tap's added latency appear in `kAudioDevicePropertyLatency` on a wired output, where video players would read it? On Bluetooth it does not: the headset reported the same latency tapped and untapped. | Lip-sync on wired outputs | 8 |
-| E15 | Which call blocks while the first prompt is unanswered, and does it always clear when the user answers? Once, a build waited 41.5 s and completed after the prompt was answered, but the wait came before `AudioDeviceStart`. Does the session need a timeout and a cancel path? | The session queue's design | 2 |
+| E15 | Does a persistently unanswered prompt block subsequent requests, and does answering always clear it? See [the first prompt](audio-taps.md#the-first-prompt). Does the session need a timeout and a cancel path? | The session queue's design | 2 |
 | E16 | The split pipeline, once built into the engine: call mode, rate and format changes, reconnection, sleep and wake, the headset's 256-frame buffer, runs of 30 minutes or more with ring fill and dropouts logged, behaviour on USB and built-in outputs, a lip-sync check with a real video player, and the headset's noise cancelling and upscaler in a known state | Whether the engine moves to it, and whether Bluetooth becomes eligible | Bluetooth |

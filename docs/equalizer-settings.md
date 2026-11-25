@@ -47,7 +47,7 @@ appears in Activity. neqMac only reads the file. Saving, replacing or deleting i
 effect live.
 
 An enabled matching assignment authorizes the first tap attempt, including when launched
-with that file already present. Allow the microphone and system audio capture requests.
+with that file already present. Allow the system audio capture request.
 The menu and routing stay responsive while the system waits. If playback goes silent,
 turn either switch off or move the file aside. Quit neqMac if direct playback does not
 resume. Check Privacy & Security before enabling the assignment again. Paused players

@@ -33,15 +33,16 @@ keep working, and there is no driver to install.
 Excluding neqMac's own process from the tap is what stops the processed output being
 captured again as input.
 
-## It needs two permissions, and fails silently without either
+## System audio capture permission
 
-A tap requires `kTCCServiceMicrophone` to be created and `kTCCServiceAudioCapture` to
-deliver samples. Both usage strings must be present in `Info.plist`:
+On one Mac running macOS 27.0.1, neqMac started with microphone and system audio
+capture access both undecided. Only the system-audio-capture prompt appeared.
+After Allow, the tap delivered the USB output mix with microphone access still
+undecided. The bundle included both `NSAudioCaptureUsageDescription` and
+`NSMicrophoneUsageDescription`. This run did not test omitting the microphone
+usage string, denying capture, or leaving the prompt unanswered.
 
-- `NSMicrophoneUsageDescription`
-- `NSAudioCaptureUsageDescription`
-
-Miss the second one and the system refuses to even ask:
+In the earlier spike, omitting the audio-capture usage string prevented the prompt:
 
 ```
 Refusing authorization request for service kTCCServiceAudioCapture ...
@@ -60,8 +61,8 @@ app has one way to mute the machine and no way to notice; how a missing or revok
 permission can be detected is still open.
 
 The permission attaches to the signing identity, so build with a stable `neqMac Local`
-certificate, as described in [Signing](development.md#signing). An ad-hoc rebuild drops
-both grants.
+certificate, as described in [Signing](development.md#signing). An ad-hoc rebuild
+can require fresh authorization.
 
 ## It must be a signed bundle that is its own responsible process
 
@@ -91,6 +92,12 @@ Measured acoustically through a microphone in the headphone cup, the real added 
 is about 2.3 ms more than the timestamps report — 6.81 ms rather than 4.50 ms at 64
 frames — presumably the tap's own capture buffering ahead of the IOProc. Treat the
 internal figure as a lower bound.
+
+With the combined aggregate in neqMac, a later USB test at 48 kHz compared EQ off
+with a profile using 0 dB gain and a 16 kHz, 12 dB/octave low-pass. From the
+player's output timestamp to the burst in the cup microphone, the medians were
+36.87 ms with the profile and 11.45 ms with EQ off (40 bursts each). The engine
+added 25.42 ms on that DAC.
 
 On Bluetooth these internal figures are not the whole cost. The headset declares 8961
 frames of latency, about 203 ms; in these in-cup runs an untapped control measured
@@ -488,7 +495,11 @@ only the fourth logged a clean teardown, with every step returning `noErr`.
 Once, on a fresh signing identity, building a session took 41.5 s while the permission
 prompt was on screen and completed once it was answered. In that run the logged
 `AudioDeviceStart` took 0.118 ms and returned `noErr`, so the wait came before it; which
-call blocked was not recorded.
+call blocked was not recorded. In the USB run on 2026-11-20, the prompt was
+answered during `AudioDeviceCreateIOProcID`. The call took 2,178 ms. The time
+of the click was not recorded. Each other build step took under 15 ms. On three
+later fresh launches after the grant, IO proc creation took 2.2–2.4 ms.
+See the [November 25 re-run](equalizer.md#re-run-on-2026-11-25) for a later cold start.
 
 ## Filters belong to devices, not to the app
 
@@ -532,7 +543,8 @@ over its vendor Bluetooth channel.
 
 [What the tap does at its edges](#what-the-tap-does-at-its-edges) now covers device loss,
 rate changes, stalls and process death, and on the headset the added delay, building,
-tearing down, call mode and reconnection. Still untested: whether alert sounds and
-applications that open a device exclusively are caught by the tap, unplugging a USB
-device while tapped, and the programme skip at teardown on Bluetooth, which needs real
-programme material rather than a tone.
+tearing down, call mode and reconnection. The [USB engine
+runs](equalizer.md#usb-output-on-macos-2701) cover unplugging a tapped DAC.
+Whether alerts and apps that take a device exclusively
+are captured remains open. Measuring the programme skip at teardown on Bluetooth
+still needs real programme material.
