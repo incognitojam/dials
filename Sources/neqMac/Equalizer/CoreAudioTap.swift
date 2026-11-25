@@ -41,9 +41,6 @@ class CoreAudioTap: TapDevice {
     private let changed: () -> Void
     private let diagnostic: (String) -> Void
     private let stillWanted: () -> Bool
-    private let allowDuplexInput: Bool
-    private var initialTapStream: AudioStreamID?
-    private var hadPhysicalInputs = false
     private var activeSubTap: AudioObjectID?
     private var attachedOutput = false
     private var layout: TapLayout?
@@ -63,9 +60,8 @@ class CoreAudioTap: TapDevice {
     private var observations: [AudioObservation] = []
     private let global = kAudioObjectPropertyScopeGlobal
 
-    init(output: AudioDevice, queue: DispatchQueue, allowDuplexInput: Bool = false, diagnostic: @escaping (String) -> Void = { _ in },
+    init(output: AudioDevice, queue: DispatchQueue, diagnostic: @escaping (String) -> Void = { _ in },
          stillWanted: @escaping () -> Bool = { true }, changed: @escaping () -> Void) {
-        self.allowDuplexInput = allowDuplexInput
         self.diagnostic = diagnostic
         self.stillWanted = stillWanted
         self.output = output
@@ -112,10 +108,13 @@ class CoreAudioTap: TapDevice {
     }
 
     func createTap() throws {
-        let input = try physicalInputsBeforeCapture()
-        try TapLayout.requireConsent(inputStreams: input.streams, bufferWidths: input.widths, allowed: allowDuplexInput)
-        hadPhysicalInputs = input.streams > 0 || input.widths.contains(where: { $0 > 0 })
+        try verifyCaptureEligibility()
         try createProcessTap()
+    }
+
+    func verifyCaptureEligibility() throws {
+        let input = try physicalInputsBeforeCapture()
+        try TapLayout.requireOutputOnly(inputStreams: input.streams, bufferWidths: input.widths)
     }
 
     func createProcessTap() throws {
@@ -154,7 +153,6 @@ class CoreAudioTap: TapDevice {
 
     func configure(_ profile: EQInfo, plan: EqualizerPlan) throws -> Double {
         if !attachedOutput {
-            // The tap is the aggregate's only source at this point. Retain its actual stream ID.
             var initial: [AudioStreamID] = []
             for _ in 0..<10 {
                 initial = try streams(aggregate, kAudioObjectPropertyScopeInput)
@@ -167,7 +165,6 @@ class CoreAudioTap: TapDevice {
                 selector: kAudioAggregateDevicePropertySubTapList, scope: global)
             guard subtaps.count == 1 else { throw SessionError.layout("Tap-only aggregate has no unique active sub-tap") }
             activeSubTap = subtaps[0]
-            initialTapStream = initial[0]
             diagnostic("Tap-only aggregate input stream ID \(initial[0]), active sub-tap ID \(subtaps[0])")
             try CoreAudioClient.writeScalar([output.uid] as CFArray, objectID: aggregate,
                 selector: kAudioAggregateDevicePropertyFullSubDeviceList, scope: global)
@@ -179,6 +176,7 @@ class CoreAudioTap: TapDevice {
             for (object, selector, scope) in [
                 (tap, kAudioTapPropertyFormat, global),
                 (output.audioObjectID, kAudioDevicePropertyDeviceIsAlive, global),
+                (output.audioObjectID, kAudioDevicePropertyStreams, kAudioObjectPropertyScopeInput),
                 (aggregate, kAudioDevicePropertyStreamConfiguration, kAudioObjectPropertyScopeOutput),
                 (aggregate, kAudioDevicePropertyStreamConfiguration, kAudioObjectPropertyScopeInput),
                 (aggregate, kAudioDevicePropertyNominalSampleRate, global),
@@ -203,6 +201,7 @@ class CoreAudioTap: TapDevice {
                 // A running session retries on the next notification. A new aggregate can
                 // still be publishing its initial streams before listeners have run.
                 if io != nil || attempts == 10 { throw error }
+                if case SessionError.ownInputs = error { throw error }
                 if case SessionError.lowRate = error { throw error }
                 Thread.sleep(forTimeInterval: 0.025)
             }
@@ -221,8 +220,7 @@ class CoreAudioTap: TapDevice {
         let outputWidths = try widths(aggregate, kAudioObjectPropertyScopeOutput)
         let physicalInputs = try streams(output.audioObjectID, kAudioObjectPropertyScopeInput)
         let physicalWidths = try widths(output.audioObjectID, kAudioObjectPropertyScopeInput)
-        try TapLayout.requireConsent(inputStreams: physicalInputs.count, bufferWidths: physicalWidths, allowed: allowDuplexInput)
-        hadPhysicalInputs = hadPhysicalInputs || !physicalInputs.isEmpty || physicalWidths.contains(where: { $0 > 0 })
+        try TapLayout.requireOutputOnly(inputStreams: physicalInputs.count, bufferWidths: physicalWidths)
         let frames: UInt32 = try CoreAudioClient.readScalar(objectID: aggregate, selector: kAudioDevicePropertyBufferFrameSize, scope: global)
         let formatReport = "Tap format \(format.mSampleRate) Hz, \(format.mChannelsPerFrame) ch, flags \(format.mFormatFlags), \(format.mBitsPerChannel) bits, \(format.mBytesPerFrame) bytes/frame. Aggregate input IDs \(inputs), buffers \(inputWidths); outputs \(outputs), buffers \(outputWidths); IO buffer \(frames) frames"
         if io == nil, formatReport != initialFormatReport {
@@ -232,8 +230,8 @@ class CoreAudioTap: TapDevice {
         guard !outputs.isEmpty, outputWidths.contains(where: { $0 > 0 }), !inputs.isEmpty else {
             throw TapError(message: "Aggregate stream configuration is settling")
         }
-        let tapStream = try TapLayout.identify(initial: initialTapStream, streams: inputs,
-            physicalCount: physicalInputs.count, duplex: hadPhysicalInputs)
+        guard inputs.count == 1 else { throw SessionError.layout("Aggregate must contain only the tap input") }
+        let tapStream = inputs[0]
         let devices: [AudioObjectID] = try CoreAudioClient.readArray(objectID: aggregate,
             selector: kAudioAggregateDevicePropertyActiveSubDeviceList, scope: global)
         let subtaps: [AudioObjectID] = try CoreAudioClient.readArray(objectID: aggregate,
@@ -254,8 +252,7 @@ class CoreAudioTap: TapDevice {
             try verifyUsage(io, selection, install: false)
         }
         layout = selection
-        let evidence = hadPhysicalInputs ? "retained tap-only ID" : "sole input on output-only device"
-        let selectionReport = "Verified \(evidence), stream ID \(tapStream) at input stream \(selection.streamIndex), starting channel \(start), first buffer \(selection.buffers.firstBuffer), \(selection.buffers.bufferCount) buffer(s)"
+        let selectionReport = "Verified sole input on output-only device, stream ID \(tapStream) at input stream \(selection.streamIndex), starting channel \(start), first buffer \(selection.buffers.firstBuffer), \(selection.buffers.bufferCount) buffer(s)"
         if let render {
             guard RenderContext.publish(render, plan: plan, channels: Int(format.mChannelsPerFrame),
                                         layout: selection.buffers, revision: revision) else {

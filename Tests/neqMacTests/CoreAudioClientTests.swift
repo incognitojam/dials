@@ -1,4 +1,5 @@
 import CoreAudio
+import EqualizerEngineCore
 import XCTest
 @testable import neqMac
 
@@ -17,7 +18,19 @@ final class CoreAudioClientTests: XCTestCase {
     func testLiveOutputMetadataWithoutCreatingTap() throws {
         let output = try defaultOutput()
         let backend = CoreAudioTap(output: output, queue: .main, changed: {})
-        _ = try backend.physicalInputsBeforeCapture()
+        let inputs = try CoreAudioClient.readArray(objectID: output.audioObjectID,
+            selector: kAudioDevicePropertyStreams, scope: kAudioObjectPropertyScopeInput)
+        let physical = try backend.physicalInputsBeforeCapture()
+        XCTAssertEqual(physical.streams, inputs.count)
+        XCTAssertEqual(output.hasInputStreams, !inputs.isEmpty)
+        XCTAssertEqual(DesiredEqualizer.eligible(output), output.transportType == kAudioDeviceTransportTypeUSB && inputs.isEmpty)
+        if !inputs.isEmpty || physical.widths.contains(where: { $0 > 0 }) {
+            XCTAssertThrowsError(try backend.verifyCaptureEligibility()) {
+                XCTAssertEqual($0.localizedDescription, "Outputs with their own inputs are not supported")
+            }
+        } else {
+            XCTAssertNoThrow(try backend.verifyCaptureEligibility())
+        }
         XCTAssertFalse(backend.removed)
         XCTAssertNotNil(backend.otherProcessPlaying)
         let scope = kAudioObjectPropertyScopeGlobal

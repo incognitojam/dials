@@ -41,22 +41,8 @@ struct TapLayout {
         members.count == 1 && UUID(uuidString: members[0]) == uuid
     }
 
-    static func identify(initial: AudioStreamID?, streams: [AudioStreamID], physicalCount: Int,
-                         duplex: Bool) throws -> AudioStreamID {
-        guard streams.count == physicalCount + 1 else {
-            throw SessionError.layout("Aggregate must contain one tap stream plus every physical input stream")
-        }
-        if !duplex, physicalCount == 0 { return streams[0] }
-        guard physicalCount > 0, let initial, streams.first == initial || streams.last == initial else {
-            throw SessionError.layout("Duplex tap stream identity or position could not be verified")
-        }
-        return initial
-    }
-
-    static func requireConsent(inputStreams: Int, bufferWidths: [UInt32], allowed: Bool) throws {
-        if !allowed && (inputStreams > 0 || bufferWidths.contains(where: { $0 > 0 })) {
-            throw SessionError.layout("USB output has input streams; allowDuplexInput is required for this assignment")
-        }
+    static func requireOutputOnly(inputStreams: Int, bufferWidths: [UInt32]) throws {
+        if inputStreams > 0 || bufferWidths.contains(where: { $0 > 0 }) { throw SessionError.ownInputs }
     }
 
     static func supported(_ format: AudioStreamBasicDescription) -> Bool {

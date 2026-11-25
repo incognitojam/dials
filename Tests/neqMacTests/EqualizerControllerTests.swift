@@ -16,7 +16,6 @@ final class EqualizerControllerTests: XCTestCase {
         var backends: [EqualizerSessionTests.Backend] = []
         var callbacks: [() -> Void] = []
         var wanted: [() -> Bool] = []
-        var duplex: [Bool] = []
         func isCurrent(_ device: AudioDevice) throws -> Bool {
             if let readError { throw readError }
             return present
@@ -26,7 +25,7 @@ final class EqualizerControllerTests: XCTestCase {
             return rateValue
         }
         func observeRate(_ device: AudioDevice, queue: DispatchQueue, changed: @escaping () -> Void) throws -> () -> Void { {} }
-        func tap(_ device: AudioDevice, duplex: Bool, queue: DispatchQueue, diagnostic: @escaping (String) -> Void,
+        func tap(_ device: AudioDevice, queue: DispatchQueue, diagnostic: @escaping (String) -> Void,
                  wanted: @escaping () -> Bool, changed: @escaping () -> Void) -> TapDevice {
             let backend = EqualizerSessionTests.Backend()
             if playingOnFirstSession && backends.isEmpty { backend.otherProcessPlaying = true }
@@ -38,13 +37,12 @@ final class EqualizerControllerTests: XCTestCase {
             backends.append(backend)
             callbacks.append(changed)
             self.wanted.append(wanted)
-            self.duplex.append(duplex)
             return backend
         }
     }
 
     let device = AudioDevice(audioObjectID: 90, uid: "test-dac", name: "Test DAC", direction: .output, transportType: kAudioDeviceTransportTypeUSB)
-    let json = #"{"enabled":true,"assignments":[{"uid":"test-dac","enabled":true,"allowDuplexInput":true,"choice":"profile","profile":{"author":"Example","type":"parametric_eq","parameters":{"gain_db":-12,"bands":[]}}}]}"#
+    let json = #"{"enabled":true,"assignments":[{"uid":"test-dac","enabled":true,"choice":"profile","profile":{"author":"Example","type":"parametric_eq","parameters":{"gain_db":-12,"bands":[]}}}]}"#
     let queue = DispatchQueue(label: "test.controller")
     let hardware = Hardware()
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -70,6 +68,16 @@ final class EqualizerControllerTests: XCTestCase {
         try FileManager.default.removeItem(at: directory)
     }
 
+    func testDuplexUSBOutputSuspendsBeforeBuildingSession() {
+        var duplex = device
+        duplex.hasInputStreams = true
+        controller.settled(output: duplex)
+        queue.sync {
+            XCTAssertEqual(statuses.last, .suspended("Outputs with their own inputs are not supported"))
+            XCTAssertTrue(hardware.backends.isEmpty)
+        }
+    }
+
     func testCurrentOutputReadFailureExplainsIdle() {
         hardware.readError = TapError(message: "default output unavailable")
         controller.settled(output: device)
@@ -83,7 +91,6 @@ final class EqualizerControllerTests: XCTestCase {
         controller.settled(output: device)
         let old = queue.sync {
             let old = controller.engine.session
-            XCTAssertEqual(hardware.duplex, [true])
             XCTAssertTrue(hardware.wanted[0]())
             hardware.present = false
             hardware.backends[0].deviceGone = true

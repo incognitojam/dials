@@ -24,11 +24,12 @@ protocol TapDevice: AnyObject {
 }
 
 enum SessionError: LocalizedError {
-    case deviceRemoved, lowRate, superseded, layout(String)
+    case deviceRemoved, lowRate, ownInputs, superseded, layout(String)
     var errorDescription: String? {
         switch self {
         case let .layout(reason): reason
         case .deviceRemoved: "Device removed"
+        case .ownInputs: DesiredEqualizer.ownInputsReason
         case .lowRate: "Output rate below 32 kHz"
         case .superseded: "Output or settings changed while starting"
         }
@@ -279,6 +280,8 @@ final class SessionEngine {
                 }
                 if case .failure(SessionError.deviceRemoved) = result {
                     finish(session, reason: .suspended("Device removed"))
+                } else if case .failure(SessionError.ownInputs) = result {
+                    finish(session, reason: .suspended(DesiredEqualizer.ownInputsReason))
                 } else if case .failure(SessionError.lowRate) = result {
                     finish(session, reason: .suspended(SessionError.lowRate.localizedDescription))
                 } else if dirty {

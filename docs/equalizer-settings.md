@@ -16,7 +16,6 @@ outputs are eligible.
       "name": "Test DAC",
       "transport": "USB",
       "choice": "profile",
-      "allowDuplexInput": false,
       "enabled": true,
       "profile": {
         "type": "parametric_eq",
@@ -34,14 +33,9 @@ outputs are eligible.
 }
 ```
 
-USB outputs with input streams require `"allowDuplexInput": true` on their own
-assignment. It defaults to false. With the default, Activity shows the device stream and
-channel counts before suspending. Opting in permits a verification attempt. The tap
-stream must retain its identity when neqMac attaches the output, its format and channels
-must match, and the aggregate must accept the tap-only IO-proc input mask. Activity
-records the selected stream, buffer range and build timings. An unverifiable layout
-suspends processing. On an output-only DAC the sole aggregate input can have a new stream
-ID. Its format, channels and input mask must still verify.
+Only USB output devices without input streams can use EQ. A DAC that exposes its
+microphone as a separate Core Audio device can still qualify. Activity shows
+“Outputs with their own inputs are not supported” for a duplex output.
 
 Both enabled switches default to false. The assignment list defaults to empty. Each
 assignment needs a nonempty UID and a choice. Name and transport default to empty
