@@ -1,4 +1,6 @@
 #pragma once
+#include "EqualizerRing.h"
+#ifdef __APPLE__
 #include <CoreAudio/CoreAudio.h>
 #include <os/lock.h>
 #include <stdint.h>
@@ -25,3 +27,4 @@ void EQRender(EQMeter *meter, const AudioBufferList *input, AudioBufferList *out
               uint32_t channels, float *scratch, uint32_t capacity, void *processor, EQProcess process);
 OSStatus EQObserveOverloads(AudioObjectID device, EQMeter *meter, bool observe);
 uint64_t EQTakeOverloads(EQMeter *meter);
+#endif
