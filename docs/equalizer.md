@@ -301,8 +301,8 @@ On an output-only DAC the aggregate's sole input identifies the tap even if HAL 
 the stream ID. On a duplex DAC the tap-only stream ID must survive attachment at either
 end of the stream list, alongside one stream per physical input stream. Reconfiguration
 checks the IO-proc mask and repairs a changed mask before republishing the input
-selection. Apple's stream mask applies to the IO proc. Driver-level microphone power
-on a DAC with its own input streams remains unverified.
+selection. Apple's stream mask applies to the IO proc. Driver-level microphone power and
+the behaviour of the target USB DAC still need hardware verification.
 [Apple’s IO-proc stream usage](https://developer.apple.com/documentation/coreaudio/audiohardwareioprocstreamusage)
 
 Playback headroom covers DC through Nyquist. The peak search samples DC, 4096
@@ -530,44 +530,54 @@ state.
 
 ### USB output on macOS 27.0.1
 
-One DAC exposed its microphone and output as separate Core Audio devices. The
-output had one stereo stream and no input streams. The merged engine at
-`05ebc0a` stayed idle: it requested a five-byte default-output ID. The first session used
-the same build with four scalar reads corrected locally, before the rate-recovery fix.
+#### First run on 2026-11-20, before #46 and #47
 
+One DAC exposed its microphone and output as separate Core Audio devices. The
+output had one stereo stream and no input streams.
+
+- **Engine stayed idle (fixed in [#46](https://github.com/incognitojam/dials/pull/46)).**
+  HAL reported the wrong size for the default-output ID read. Swift had inferred an
+  optional ID, whose storage takes five bytes. The remaining trials used the same
+  build (`05ebc0a`) with four scalar reads corrected locally.
 - **Selection and startup.** The sole tap input retained its stream ID across
   attachment and idle rate changes. At 48 kHz it was interleaved Float32 stereo,
   starting at channel 1, with a 512-frame IO buffer and verified tap-only mask.
-  A warm file-triggered build took about 57 ms. See
-  [the first prompt](audio-taps.md#the-first-prompt) for the cold permission wait.
+  A warm file-triggered build took about 57 ms. The [first prompt](audio-taps.md#the-first-prompt)
+  measurements cover the build that requested capture access.
 - **Acoustic response.** A microphone between closed headphone cups recorded
   −36 dBFS tones. With a 1 kHz, 12 dB/octave low-pass and −12 dB gain, measured
-  changes at 250 Hz and 1 kHz were approximately −11.5 and −14.7 dB (design
-  −12.0 and −15.0). At 4 and 8 kHz the estimates were noise-limited: at least
-  31 dB and about 41 dB attenuation (design 36.5 and 49.8). Across three
-  switches, enabling produced a 10–20 ms dip, disabling about 40 ms. No
+  changes at 250 Hz and 1 kHz were approximately −11.7 and −14.7 dB (design
+  −12.0 and −15.0). The 4 kHz estimate was about 37 dB down (design 36.5 dB),
+  but the processed tone was within 2 dB of the measured noise floor. At 8 kHz the
+  tone was 14 dB above the floor and about 43 dB below direct (design 49.8 dB).
+  Across three switches, enabling produced a 10–20 ms dip and disabling about 40 ms. No
   high-frequency burst stood out in the 10 ms analysis windows. The processed
-  level arrived about 270 ms after saving the file on one enable.
-- **Clock changes.** The DAC went quiet for 0.70–0.78 s with or without EQ. In
-  three playing transitions (48→44.1, 48→96, 96→48 kHz) the 350 ms watchdog
-  released the tap, leaving playback at the unprocessed level until a file edit.
-  Verification occupied the session queue for about 660 ms; two trials also
+  level arrived 275 and 295 ms after the two saves that enabled EQ.
+- **Clock changes (fixed in [#47](https://github.com/incognitojam/dials/pull/47)).**
+  The first run measured a 0.70–0.78 s gap with or without EQ using a 10 dB
+  drop in the recorded tone. In all three playing transitions (48→44.1, 48→96,
+  96→48 kHz) the 350 ms watchdog released the tap. Playback stayed at the
+  unprocessed level until a file edit.
+  Verification occupied the session queue for about 660 ms. Two trials also
   logged aggregate StartIO error 35. The idle 48→44.1→96→48 kHz sequence kept
-  the session and its processing. Each change produced 4–17 format/verification
-  reports.
+  the session and its processing. Each idle change logged 13 tap formats and
+  13 input verifications. The playing changes logged two formats each and two,
+  two and one verifications respectively. See the [re-run](#re-run-on-2026-11-25)
+  for recovery with the fix.
 - **Process termination.** From measured level transitions, quit, SIGTERM and
   SIGKILL restored direct audio in about 230, 90 and 110 ms respectively, with
   at most 30 ms of silence and no observed burst (one run each). SIGSTOP kept
   the output silent for the two-second stop. After SIGCONT, processing returned
-  within 50 ms.
+  in about 60 ms. One “Repeated equalizer IO overloads” message followed about
+  a second after SIGCONT.
 - **Unplug.** Two unplugs included one during playback. The app reported one
   removal on loss. Fallback speaker playback was confirmed by ear only. On
   replug the DAC became default and a verified session restarted in about 54 ms
   without a file edit. The cup recording measured −14.9 dB at 1 kHz after replug.
 - **Watchdog and settings.** Outside the playing rate changes, starts/stops, two
-  mid-tone player IO restarts, eight seconds of exact zeros, idle periods and
-  transient activity-read failures caused no observed false failure. Absent or
-  disabled settings and an explicit “none” assignment stayed idle. Truncated
+  mid-tone player IO restarts, eight seconds of exact zeros and idle periods
+  caused no observed false failure. Absent or disabled settings and an explicit
+  “none” assignment stayed idle. Truncated
   JSON, a missing field, a wrong type and an empty UID produced Activity reasons.
   A +6 dB preamp and +6 dB peak, a +12 dB peak at 5 Hz, a +24 dB shelf at
   8 Hz, and +30 dB preamp alone reported 12, 12, 24 and 30 dB headroom.
@@ -575,23 +585,27 @@ the same build with four scalar reads corrected locally, before the rate-recover
 #### Re-run on 2026-11-25
 
 With both fixes on the same DAC and an enabled settings file already present, the
-first `running` status came 2.72 s after the first app log entry. The microphone
-between the cups measured the 1 kHz tone about 14.8 dB below direct playback
-(15 dB below by design). [What it costs](audio-taps.md#what-it-costs) gives the
+first `running` status came 2.72 s after the first app log entry. IO proc creation
+took 2.52 s of that time. Whether a prompt appeared was not recorded. The 1 kHz
+tone measured about 15 dB below direct playback, within roughly 1 dB of the
+design. Steady passages were 14.2–14.6 dB down at 48 kHz and 15.7–16.1 dB
+down at 44.1 and 96 kHz. [What it costs](audio-taps.md#what-it-costs) gives the
 separate burst measurement of playback latency.
 
 During continuous playback the DAC went from 48 to 44.1 kHz and back, to 96 kHz
 and back, then to 44.1 kHz and back. All six changes returned to `running` and
 the corrected tone level without a file edit. HAL logged `_StartIO` error 35 at
-every change. None produced a watchdog stall. Both idle changes (48→44.1→48 kHz)
-also returned to `running`, and the next tone at each rate had the correction.
+every playing change and one of the two idle changes. None produced a watchdog
+stall. Both idle changes (48→44.1→48 kHz) returned to `running`, and the next
+tone at each rate had the correction.
 
 In 50 ms microphone windows the tone stayed more than 3 dB below its steady level
 for about 750–850 ms with EQ and 750–800 ms in four untapped changes. On four of the
 six playing changes, short portions of the returning tone reached the
 direct-playback level before the correction settled. Counting 10 ms windows within 6
-dB of the direct tone gave about 20–80 ms per affected change. None exceeded the
-levels in the direct recording.
+dB of the direct tone at 1 kHz gave about 20–80 ms per affected change. None
+exceeded the direct recording at 1 kHz. This criterion can also include partially
+processed audio.
 
 One unplug suspended EQ with “Device removed”. When the DAC reappeared, EQ was
 running again within about a second. A fresh tone on the DAC had the correction.
@@ -601,9 +615,14 @@ so following the system default away from it and back remains untested.
 These small counts describe one DAC. Neither session tested a denied or unanswered
 permission prompt, sleep and wake, EQ with automatic routing enabled, rates below
 32 kHz, or inspection for leftover private taps after USB teardown.
-The engine taps and mutes only output stream 0. Other streams on a multi-stream
-output would pass through unprocessed. Multi-buffer, more-than-stereo,
-non-interleaved and duplex layouts have only been exercised with test doubles.
+The code taps and mutes only output stream 0, so other output streams are
+expected to pass through unprocessed. This was not measured. Multi-buffer,
+more-than-stereo and non-interleaved layouts have only run against test doubles.
+
+Several equalized recordings, including the first tone in a fresh session, had
+brief broadband transients about 1–4 times per second during steady playback.
+They were absent from the direct controls and occurred away from rate changes.
+Their source remains unknown.
 
 ### Open
 

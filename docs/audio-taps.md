@@ -93,10 +93,11 @@ is about 2.3 ms more than the timestamps report — 6.81 ms rather than 4.50 ms 
 frames — presumably the tap's own capture buffering ahead of the IOProc. Treat the
 internal figure as a lower bound.
 
-With the combined aggregate in neqMac, a later USB test at 48 kHz compared a flat
-0 dB profile with EQ off. From the player's output timestamp to the burst in the
-cup microphone, the medians were 36.87 ms and 11.45 ms respectively (40 bursts
-each). The engine added 25.42 ms on that DAC.
+With the combined aggregate in neqMac, a later USB test at 48 kHz compared EQ off
+with a profile using 0 dB gain and a 16 kHz, 12 dB/octave low-pass. From the
+player's output timestamp to the burst in the cup microphone, the medians were
+36.87 ms with the profile and 11.45 ms with EQ off (40 bursts each). The engine
+added 25.42 ms on that DAC.
 
 On Bluetooth these internal figures are not the whole cost. The headset declares 8961
 frames of latency, about 203 ms; in these in-cup runs an untapped control measured
@@ -494,9 +495,11 @@ only the fourth logged a clean teardown, with every step returning `noErr`.
 Once, on a fresh signing identity, building a session took 41.5 s while the permission
 prompt was on screen and completed once it was answered. In that run the logged
 `AudioDeviceStart` took 0.118 ms and returned `noErr`, so the wait came before it; which
-call blocked was not recorded. In the first granted USB app session,
-`AudioDeviceCreateIOProcID` took 2,178 ms, including the time to click Allow.
-Each other build step took under 23 ms.
+call blocked was not recorded. In the USB run on 2026-11-20, the prompt was
+answered during `AudioDeviceCreateIOProcID`. The call took 2,178 ms. The time
+of the click was not recorded. Each other build step took under 15 ms. On three
+later fresh launches after the grant, IO proc creation took 2.2–2.4 ms.
+See the [November 25 re-run](equalizer.md#re-run-on-2026-11-25) for a later cold start.
 
 ## Filters belong to devices, not to the app
 
