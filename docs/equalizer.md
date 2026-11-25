@@ -527,6 +527,11 @@ state.
 
 ### USB output on macOS 27.0.1
 
+For continuity checks, tape the microphone between the cups, keep hands off the desk
+and use a flat EQ profile level-matched to direct playback. When samples were removed
+from the recorded tone, the phase test missed most drops shorter than eight samples at
+the quieter corrected level and detected every tested drop of two or more at the flat level.
+
 #### First run on 2026-11-20, before #46 and #47
 
 One DAC exposed its microphone and output as separate Core Audio devices. The
@@ -616,10 +621,12 @@ The code taps and mutes only output stream 0, so other output streams are
 expected to pass through unprocessed. This was not measured. Multi-buffer,
 more-than-stereo and non-interleaved layouts have only run against test doubles.
 
-Several equalized recordings, including the first tone in a fresh session, had
-brief broadband transients about 1–4 times per second during steady playback.
-They were absent from the direct controls and occurred away from rate changes.
-Their source remains unknown.
+The brief broadband transients were a measurement artefact. Five occurred in the
+1.4 s before the test app launched, with no test tone playing. The 26 s level-matched
+flat EQ recording had none. Takes with frequent events had stronger low-frequency
+rumble, and the tone showed no consistent phase step across events. Handling or
+desk vibration at the microphone is the likely cause. Electrical noise at its input
+remains possible.
 
 ### Open
 
